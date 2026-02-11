@@ -8,6 +8,7 @@ Streamlit app (accepts bytes input from st.file_uploader).
 
 Tested against Energia bills; designed to be extended for other suppliers.
 """
+import json
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -15,7 +16,162 @@ import pymupdf
 
 
 # ---------------------------------------------------------------------------
-# Data model
+# Data model – Generic pipeline (LineItem + GenericBillData)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LineItem:
+    """A single line item on an invoice / bill."""
+    description: str
+    line_total: float
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
+    unit_price: Optional[float] = None
+    vat_rate: Optional[float] = None
+    vat_amount: Optional[float] = None
+
+
+@dataclass
+class GenericBillData:
+    """Provider-agnostic bill representation for the generic extraction pipeline.
+
+    Designed to represent any Irish utility bill (electricity, gas, heating oil)
+    with variable-length line items instead of hardcoded per-tariff fields.
+    """
+    # Identity
+    provider: str = ""
+    invoice_number: Optional[str] = None
+    account_number: Optional[str] = None
+    mprn: Optional[str] = None
+    gprn: Optional[str] = None
+
+    # Dates
+    invoice_date: Optional[str] = None
+    billing_period: Optional[str] = None
+    due_date: Optional[str] = None
+
+    # Line items (variable length)
+    line_items: list = field(default_factory=list)
+
+    # Totals
+    subtotal: Optional[float] = None
+    vat_amount: Optional[float] = None
+    vat_rate: Optional[float] = None
+    total_incl_vat: Optional[float] = None
+
+    # Metadata
+    extraction_method: str = ""
+    confidence_score: float = 0.0
+    raw_text: Optional[str] = None
+    warnings: list = field(default_factory=list)
+
+    # ---- serialization helpers ----
+
+    def to_dict(self) -> dict:
+        """Serialize to a plain dict (line_items become list-of-dicts)."""
+        d = asdict(self)
+        return d
+
+    def to_json(self, **kwargs) -> str:
+        """Serialize to JSON string."""
+        return json.dumps(self.to_dict(), default=str, **kwargs)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "GenericBillData":
+        """Construct from a plain dict (inverse of to_dict)."""
+        d = dict(d)  # Avoid mutating caller's dict
+        items_raw = d.pop("line_items", [])
+        items = [LineItem(**li) if isinstance(li, dict) else li for li in items_raw]
+        # Filter to known fields to avoid TypeError on unknown keys
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in d.items() if k in known}
+        return cls(line_items=items, **filtered)
+
+
+def generic_to_legacy(generic: GenericBillData) -> "BillData":
+    """Convert a GenericBillData to the legacy BillData used by the Streamlit UI.
+
+    Maps the generic model's fields and line items back to the flat field layout
+    expected by ``show_bill_summary()`` and ``generate_bill_excel()`` in main.py.
+    """
+    bill = BillData()
+
+    # --- Identity ---
+    bill.supplier = generic.provider or None
+    bill.mprn = generic.mprn
+    bill.account_number = generic.account_number
+    bill.invoice_number = generic.invoice_number
+
+    # --- Dates ---
+    bill.bill_date = generic.invoice_date
+    bill.payment_due_date = generic.due_date
+    if generic.billing_period:
+        parts = generic.billing_period.split(" - ", 1)
+        if len(parts) == 2:
+            bill.billing_period_start = parts[0].strip()
+            bill.billing_period_end = parts[1].strip()
+        else:
+            # Try alternate separator
+            parts = generic.billing_period.split("-", 1)
+            if len(parts) == 2 and len(parts[0].strip()) > 4:
+                bill.billing_period_start = parts[0].strip()
+                bill.billing_period_end = parts[1].strip()
+
+    # --- Line items → flat fields ---
+    for item in generic.line_items:
+        desc_lower = item.description.lower()
+
+        if "day" in desc_lower and "stand" not in desc_lower:
+            bill.day_units_kwh = item.quantity
+            bill.day_rate = item.unit_price
+            bill.day_cost = item.line_total
+        elif "night" in desc_lower:
+            bill.night_units_kwh = item.quantity
+            bill.night_rate = item.unit_price
+            bill.night_cost = item.line_total
+        elif "peak" in desc_lower:
+            bill.peak_units_kwh = item.quantity
+            bill.peak_rate = item.unit_price
+            bill.peak_cost = item.line_total
+        elif "standing" in desc_lower:
+            bill.standing_charge_total = item.line_total
+            if item.quantity is not None:
+                bill.standing_charge_days = int(item.quantity)
+            bill.standing_charge_rate = item.unit_price
+        elif "pso" in desc_lower or "public service" in desc_lower:
+            bill.pso_levy = item.line_total
+        elif "discount" in desc_lower:
+            bill.discount = item.line_total
+        elif "export" in desc_lower:
+            bill.export_units = item.quantity
+            bill.export_rate = item.unit_price
+            bill.export_credit = item.line_total
+
+    # Total consumption
+    total = 0.0
+    has_any = False
+    for v in [bill.day_units_kwh, bill.night_units_kwh, bill.peak_units_kwh]:
+        if v is not None:
+            total += v
+            has_any = True
+    bill.total_units_kwh = round(total, 3) if has_any else None
+
+    # --- Totals ---
+    bill.subtotal_before_vat = generic.subtotal
+    bill.vat_amount = generic.vat_amount
+    bill.vat_rate_pct = generic.vat_rate
+    bill.total_this_period = generic.total_incl_vat
+
+    # --- Metadata ---
+    bill.extraction_method = generic.extraction_method
+    bill.confidence_score = generic.confidence_score
+    bill.warnings = list(generic.warnings)
+
+    return bill
+
+
+# ---------------------------------------------------------------------------
+# Data model – Legacy (flat Energia-style fields)
 # ---------------------------------------------------------------------------
 
 @dataclass

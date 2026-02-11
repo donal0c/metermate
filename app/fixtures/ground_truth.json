@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "description": "Ground-truth expected values for pipeline accuracy evaluation",
+    "version": 1,
+    "created": "2026-02-11",
+    "scoring_spec": {
+      "critical_fields": ["mprn", "account_number", "subtotal", "vat_rate", "vat_amount", "total_incl_vat"],
+      "critical_weight": 2.0,
+      "non_critical_weight": 1.0,
+      "na_treatment": "Exclude from scoring if field not applicable to bill type",
+      "match_rules": {
+        "numeric": "Strip commas, compare as float with tolerance ±0.02",
+        "string": "Case-insensitive exact match after stripping whitespace",
+        "mprn": "Strip spaces, compare as string"
+      },
+      "aggregate": "weighted_accuracy = sum(weight * match) / sum(weight) across all applicable fields"
+    }
+  },
+  "fixtures": [
+    {
+      "filename": "1845.pdf",
+      "provider": "Go Power",
+      "bill_type": "electricity",
+      "expected": {
+        "mprn": "10006002900",
+        "account_number": "BIS007",
+        "day_kwh": "4540",
+        "day_rate": "12.2700",
+        "standing_charge": "10.90",
+        "subtotal": "1252.14",
+        "vat_rate": "9",
+        "vat_amount": "112.69",
+        "total_incl_vat": "1364.83"
+      },
+      "not_applicable": ["night_kwh", "night_rate", "night_cost", "invoice_number", "gprn", "litres", "unit_price"]
+    },
+    {
+      "filename": "2024 Mar - Apr.pdf",
+      "provider": "ESB Networks",
+      "bill_type": "electricity",
+      "expected": {
+        "mprn": "10305584286",
+        "account_number": "903921399",
+        "invoice_number": "1908831521",
+        "billing_period": "29 Feb 24 - 30 Apr 24",
+        "subtotal": "7031.09",
+        "vat_rate": "9",
+        "vat_amount": "780.83",
+        "mcc_code": "06",
+        "dg_code": "DG6"
+      },
+      "not_applicable": ["gprn", "litres", "unit_price"],
+      "notes": "ESB total_incl_vat (2315.68) represents net balance after payments, not subtotal+VAT. Excluded from totals crosscheck."
+    },
+    {
+      "filename": "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf",
+      "provider": "Energia",
+      "bill_type": "electricity",
+      "expected": {
+        "mprn": "10006802505",
+        "account_number": "8386744600",
+        "invoice_number": "7078942",
+        "day_kwh": "242",
+        "day_rate": "0.15148",
+        "day_cost": "36.66",
+        "night_kwh": "724",
+        "night_rate": "0.11896",
+        "night_cost": "86.13",
+        "pso_levy": "12.91",
+        "subtotal": "244.45",
+        "vat_rate": "9",
+        "vat_amount": "22.00",
+        "total_incl_vat": "266.45"
+      },
+      "not_applicable": ["gprn", "litres", "unit_price"]
+    }
+  ]
+}
