@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Research & experiments (not part of deployed app)
+experiment_*.py
+research_*.py
+research_*.txt
+*_output.txt
+bill_extractor_prototype.py
+research_output/
+
+# Beads issue tracker
+.beads/
+
+# Test files
+test_*.py
+test_*.mjs
+
+# Bills / sample data
+Steve_bills/
+extracted_images/
+screenshots/
+test-results/
+
+# Node (playwright tests etc)
+node_modules/
+package.json
+package-lock.json
+
+# Tesseract trained data
+*.traineddata
+
+# Docs (internal)
+docs/
+AGENTS.md
+
+# Misc artifacts
+=3.0.0
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Data files (user-uploaded, not committed)
+*.csv
+*.xlsx
+*.hdf
+*.pdf
