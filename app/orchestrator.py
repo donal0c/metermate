@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -35,6 +36,7 @@ from pipeline import (
 )
 from provider_configs import get_provider_config
 from spatial_extraction import extract_tier2_spatial
+from llm_extraction import extract_tier4_llm, merge_llm_with_existing, Tier4ExtractionResult
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class PipelineResult:
     provider_detection: ProviderDetectionResult
     tier3: Optional[Tier3ExtractionResult] = None
     tier2: Optional[Tier2ExtractionResult] = None
+    tier4: Optional[Tier4ExtractionResult] = None
     extraction_path: list[str] = field(default_factory=list)
 
 
@@ -228,6 +231,48 @@ def _is_low_quality_text(text: str) -> bool:
     return False
 
 
+def _try_tier4_llm(
+    source: bytes | str,
+    extraction_path: list[str],
+    is_image: bool = False,
+) -> Tier4ExtractionResult | None:
+    """Attempt Tier 4 LLM extraction, returning None if unavailable.
+
+    Gracefully handles missing API key or google-genai package.
+    """
+    if not os.environ.get("GEMINI_API_KEY"):
+        log.debug("Tier 4 skipped: GEMINI_API_KEY not set")
+        return None
+
+    try:
+        extraction_path.append("tier4_llm")
+        result = extract_tier4_llm(source, is_image=is_image)
+        return result
+    except RuntimeError as e:
+        log.warning("Tier 4 LLM unavailable: %s", e)
+        return None
+    except Exception as e:
+        log.warning("Tier 4 LLM failed: %s", e, exc_info=True)
+        return None
+
+
+def _detect_provider_from_fields(
+    fields: dict[str, FieldExtractionResult],
+) -> str:
+    """Infer provider name from LLM-extracted fields."""
+    provider_field = fields.get("provider")
+    if provider_field and provider_field.value.strip():
+        # Normalize to match known provider names
+        raw = provider_field.value.strip()
+        # Try case-insensitive match against known providers
+        for known in PROVIDER_BILL_TYPE:
+            if raw.lower() == known.lower():
+                return known
+        # Return as-is if not in known list
+        return raw
+    return "unknown"
+
+
 def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
     """Extract structured bill data from a PDF using the tiered pipeline.
 
@@ -342,7 +387,46 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
                 extraction_path=extraction_path,
             )
 
-        # Spatial extraction failed or produced no results - fall through
+        # Spatial extraction failed or produced no results - try Tier 4 LLM
+        tier4 = _try_tier4_llm(source, extraction_path)
+        if tier4 is not None and tier4.field_count > 0:
+            extraction_fields = tier4.fields
+            provider_name = _detect_provider_from_fields(tier4.fields)
+            provider_result = ProviderDetectionResult(
+                provider_name=provider_name,
+                is_known=provider_name != "unknown",
+            )
+            extraction_path.append(
+                f"tier1_{'known' if provider_result.is_known else 'unknown'}"
+            )
+
+            bill_type = PROVIDER_BILL_TYPE.get(provider_name)
+            confidence = calculate_confidence(
+                extraction_fields,
+                provider=provider_name,
+                bill_type=bill_type,
+            )
+
+            build_result = Tier3ExtractionResult(
+                provider=provider_name,
+                fields=extraction_fields,
+                field_count=len(extraction_fields),
+                hit_rate=tier4.hit_rate,
+                warnings=tier4.warnings,
+            )
+
+            extraction_method = " \u2192 ".join(extraction_path)
+            bill = _build_bill(build_result, provider_name, confidence, extraction_method, text)
+
+            return PipelineResult(
+                bill=bill,
+                confidence=confidence,
+                tier0=tier0,
+                provider_detection=provider_result,
+                tier4=tier4,
+                extraction_path=extraction_path,
+            )
+
         extraction_path.append("insufficient_text")
         empty_provider = ProviderDetectionResult(
             provider_name="unknown", is_known=False
@@ -397,6 +481,22 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
         bill_type=bill_type,
     )
 
+    # ---- Tier 4 LLM escalation ----
+    # If confidence is in the "escalate" band, try LLM to fill gaps
+    tier4 = None
+    if confidence.band == "escalate":
+        tier4 = _try_tier4_llm(source, extraction_path)
+        if tier4 is not None and tier4.field_count > 0:
+            extraction_fields = merge_llm_with_existing(
+                tier4.fields, extraction_fields,
+            )
+            # Recalculate confidence with merged fields
+            confidence = calculate_confidence(
+                extraction_fields,
+                provider=provider_name,
+                bill_type=bill_type,
+            )
+
     # ---- Build GenericBillData ----
     # Build a Tier3-shaped result for _build_bill compatibility
     if tier3 is not None:
@@ -420,5 +520,6 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
         provider_detection=provider_result,
         tier3=tier3,
         tier2=tier2,
+        tier4=tier4,
         extraction_path=extraction_path,
     )
