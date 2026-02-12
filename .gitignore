@@ -24,8 +24,8 @@ research_output/
 # Beads issue tracker
 .beads/
 
-# Test files
-test_*.py
+# Scratch test/screenshot scripts
+test_phase3_screenshots.py
 test_*.mjs
 
 # Bills / sample data
