@@ -24,13 +24,20 @@ from provider_configs import (
     GO_POWER_CONFIG,
     ESB_NETWORKS_CONFIG,
     KERRY_PETROLEUM_CONFIG,
+    ELECTRIC_IRELAND_CONFIG,
+    SSE_AIRTRICITY_CONFIG,
 )
 
 BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 
 
 def _pdf_path(filename: str) -> str:
     return os.path.join(BILLS_DIR, filename)
+
+
+def _root_pdf_path(filename: str) -> str:
+    return os.path.join(ROOT_DIR, filename)
 
 
 # ===================================================================
@@ -206,6 +213,128 @@ class TestTier3Energia:
 
     def test_hit_rate(self, extraction):
         print(f"\nEnergia hit rate: {extraction.hit_rate:.0%} ({extraction.field_count} fields)")
+        for name, fr in sorted(extraction.fields.items()):
+            print(f"  {name}: {fr.value}")
+
+
+class TestTier3ElectricIreland:
+    """Test Electric Ireland Tier 3 extraction against two bill formats."""
+
+    # New format (smart meter, 2025)
+    PDF_NEW = "download.pdf"
+    # Old format (single tariff, 2023)
+    PDF_OLD = "Bill_310148750 (1).pdf"
+
+    @pytest.fixture
+    def extraction_new(self):
+        path = _root_pdf_path(self.PDF_NEW)
+        if not os.path.exists(path):
+            pytest.skip(f"PDF not found: {self.PDF_NEW}")
+        tier0 = extract_text_tier0(path)
+        return extract_with_config(tier0.extracted_text, "Electric Ireland")
+
+    @pytest.fixture
+    def extraction_old(self):
+        path = _root_pdf_path(self.PDF_OLD)
+        if not os.path.exists(path):
+            pytest.skip(f"PDF not found: {self.PDF_OLD}")
+        tier0 = extract_text_tier0(path)
+        return extract_with_config(tier0.extracted_text, "Electric Ireland")
+
+    def test_provider_identified(self, extraction_new):
+        assert extraction_new.provider == "Electric Ireland"
+
+    def test_mprn_extracted_new(self, extraction_new):
+        assert "mprn" in extraction_new.fields
+        mprn = extraction_new.fields["mprn"].value
+        assert len(mprn) == 11
+        assert mprn.startswith("10")
+
+    def test_mprn_extracted_old(self, extraction_old):
+        assert "mprn" in extraction_old.fields
+        mprn = extraction_old.fields["mprn"].value
+        assert len(mprn) == 11
+        assert mprn.startswith("10")
+
+    def test_account_number_new(self, extraction_new):
+        assert "account_number" in extraction_new.fields
+        assert extraction_new.fields["account_number"].value == "2298483377"
+
+    def test_account_number_old(self, extraction_old):
+        assert "account_number" in extraction_old.fields
+        assert extraction_old.fields["account_number"].value == "950960495"
+
+    def test_critical_fields_new(self, extraction_new):
+        available = CRITICAL_FIELDS & set(extraction_new.fields.keys())
+        assert len(available) >= 5, f"Only found {len(available)}/6: {available}"
+
+    def test_critical_fields_old(self, extraction_old):
+        available = CRITICAL_FIELDS & set(extraction_old.fields.keys())
+        assert len(available) >= 5, f"Only found {len(available)}/6: {available}"
+
+    def test_smart_meter_fields(self, extraction_new):
+        """New format bills should extract day/night/peak usage."""
+        assert "day_kwh" in extraction_new.fields
+        assert "night_kwh" in extraction_new.fields
+        assert "peak_kwh" in extraction_new.fields
+
+    def test_hit_rate_new(self, extraction_new):
+        print(f"\nElectric Ireland (new) hit rate: {extraction_new.hit_rate:.0%} ({extraction_new.field_count} fields)")
+        for name, fr in sorted(extraction_new.fields.items()):
+            print(f"  {name}: {fr.value}")
+
+    def test_hit_rate_old(self, extraction_old):
+        print(f"\nElectric Ireland (old) hit rate: {extraction_old.hit_rate:.0%} ({extraction_old.field_count} fields)")
+        for name, fr in sorted(extraction_old.fields.items()):
+            print(f"  {name}: {fr.value}")
+
+
+class TestTier3SSEAirtricity:
+    """Test SSE Airtricity Tier 3 extraction.
+
+    Note: The fixture is an illustrative example with blank MPRN/account fields.
+    """
+
+    PDF = "SSE_Airtricity_example.pdf"
+
+    @pytest.fixture
+    def extraction(self):
+        path = _root_pdf_path(self.PDF)
+        if not os.path.exists(path):
+            pytest.skip(f"PDF not found: {self.PDF}")
+        tier0 = extract_text_tier0(path)
+        return extract_with_config(tier0.extracted_text, "SSE Airtricity")
+
+    def test_provider_identified(self, extraction):
+        assert extraction.provider == "SSE Airtricity"
+
+    def test_billing_period(self, extraction):
+        assert "billing_period" in extraction.fields
+        assert "22/12/2017" in extraction.fields["billing_period"].value
+
+    def test_day_night_kwh(self, extraction):
+        assert "day_kwh" in extraction.fields
+        assert "night_kwh" in extraction.fields
+        assert extraction.fields["day_kwh"].value == "247.00"
+        assert extraction.fields["night_kwh"].value == "49.00"
+
+    def test_standing_charge(self, extraction):
+        assert "standing_charge" in extraction.fields
+        val = extraction.fields["standing_charge"].value
+        # Should be "31.00 - 0.6037 - 18.72" (days - rate - total)
+        parts = val.split(" - ")
+        assert len(parts) == 3
+
+    def test_total_and_vat(self, extraction):
+        assert "subtotal" in extraction.fields
+        assert "vat_rate" in extraction.fields
+        assert "vat_amount" in extraction.fields
+        assert "total_incl_vat" in extraction.fields
+        assert extraction.fields["subtotal"].value == "72.85"
+        assert extraction.fields["total_incl_vat"].value == "82.68"
+
+    def test_hit_rate(self, extraction):
+        print(f"\nSSE Airtricity hit rate: {extraction.hit_rate:.0%} ({extraction.field_count} fields)")
         for name, fr in sorted(extraction.fields.items()):
             print(f"  {name}: {fr.value}")
 
