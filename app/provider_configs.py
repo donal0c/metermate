@@ -51,10 +51,28 @@ ENERGIA_CONFIG = {
         },
         "billing_period": {
             "patterns": [
-                (None, r"(?:Billing|Bill)\s*Period\s*[:\s]*(\d{1,2}\s+\w+\s+\d{4}\s*(?:to|-)\s*\d{1,2}\s+\w+\s+\d{4})"),
-                (None, r"Billing\s*Period\s*\n?\s*(\d{2}/\d{2}/\d{4})\s*-\s*(\d{2}/\d{2}/\d{4})"),
+                (None, r"(?:Billing|Bill|Accounting)\s*Period\s*[:\s]*(\d{1,2}\s+\w+\s+\d{4}\s*(?:to|-)\s*\d{1,2}\s+\w+\s+\d{4})"),
+                # Multiline: label on one line, dates on the next
+                (None, r"(?:Billing|Bill|Accounting)\s*Period\s*\n\s*(\d{1,2}\s+\w+\s+\d{4}\s*(?:to|-)\s*\d{1,2}\s+\w+\s+\d{4})"),
+                # dd/mm/yyyy - dd/mm/yyyy
+                (None, r"(?:Billing|Bill|Accounting)\s*Period\s*[:\s]*(\d{2}/\d{2}/\d{4})\s*[-–]\s*(\d{2}/\d{2}/\d{4})"),
+                (None, r"(?:Billing|Bill|Accounting)\s*Period\s*\n?\s*(\d{2}/\d{2}/\d{4})\s*[-–]\s*(\d{2}/\d{2}/\d{4})"),
+                # dd.mm.yyyy - dd.mm.yyyy
+                (None, r"(?:Billing|Bill|Accounting)\s*Period\s*[:\s]*(\d{2}\.\d{2}\.\d{4})\s*[-–]\s*(\d{2}\.\d{2}\.\d{4})"),
+                (None, r"(?:Billing|Bill|Accounting)\s*Period\s*\n?\s*(\d{2}\.\d{2}\.\d{4})\s*[-–]\s*(\d{2}\.\d{2}\.\d{4})"),
             ],
             "confidence": 0.90,
+        },
+        "invoice_date": {
+            "patterns": [
+                (None, r"(?:Invoice|Bill)\s*Date\s*[:\s]*(\d{1,2}\s+\w+\s+\d{4})"),
+                (None, r"(?:Invoice|Bill)\s*Date\s*\n?\s*(\d{1,2}\s+\w+\s+\d{4})"),
+                # ACCOUNT SUMMARY section: "Date\n11 Apr 2025"
+                (r"ACCOUNT\s*SUMMARY", r"Date\s*\n\s*(\d{1,2}\s+\w+\s+\d{4})"),
+                (None, r"(?:Invoice|Bill)\s*Date\s*[:\s]*(\d{2}/\d{2}/\d{4})"),
+                (None, r"(?:Invoice|Bill)\s*Date\s*[:\s]*(\d{2}\.\d{2}\.\d{4})"),
+            ],
+            "confidence": 0.85,
         },
         "day_kwh": {
             "patterns": [

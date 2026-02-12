@@ -6,6 +6,7 @@ and Excel/CSV energy data exports, generating professional visualizations for
 energy audit reports.
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import hashlib
@@ -41,7 +42,16 @@ from column_mapping import detect_columns, build_column_mapping, validate_mappin
 from excel_parser import parse_excel_file, read_upload, get_sheet_names
 from bill_parser import extract_bill, BillData, generic_to_legacy
 from orchestrator import extract_bill_pipeline
+from bill_verification import (
+    validate_cross_reference,
+    compute_verification,
+    get_consumption_deltas,
+    get_rate_comparison,
+    VerificationResult,
+    parse_bill_date,
+)
 from dataclasses import asdict
+import plotly.graph_objects as go
 
 # Page config
 st.set_page_config(
@@ -454,12 +464,31 @@ def main():
             st.divider()
 
         st.markdown("### 📁 Upload Data")
-        uploaded_file = st.file_uploader(
-            "Energy Data File",
-            type=['csv', 'xlsx', 'xls', 'pdf'],
-            help="Upload an ESB Networks HDF file (CSV), Excel spreadsheet, or electricity bill (PDF)",
-            label_visibility="collapsed"
+        analysis_mode = st.radio(
+            "Mode",
+            ["Single File", "Bill Comparison"],
+            key="analysis_mode",
+            horizontal=True,
         )
+
+        uploaded_file = None
+        uploaded_files = None
+        if analysis_mode == "Single File":
+            uploaded_file = st.file_uploader(
+                "Energy Data File",
+                type=['csv', 'xlsx', 'xls', 'pdf'],
+                help="Upload an ESB Networks HDF file (CSV), Excel spreadsheet, or electricity bill (PDF)",
+                label_visibility="collapsed"
+            )
+        else:
+            uploaded_files = st.file_uploader(
+                "Upload Bills (PDF)",
+                type=['pdf'],
+                accept_multiple_files=True,
+                help="Upload 2 or more electricity bills for side-by-side comparison",
+                label_visibility="collapsed",
+                key="comparison_uploader",
+            )
 
         st.divider()
 
@@ -477,12 +506,29 @@ def main():
 
         st.divider()
 
-        # Tariff rate inputs
-        st.markdown("### Tariff Rates")
+        # Hide tariff panel during bill PDF view (rates come from bill itself)
+        _is_bill_upload = (
+            analysis_mode == "Bill Comparison"
+            or (uploaded_file is not None and uploaded_file.name.lower().endswith('.pdf'))
+            or st.session_state.get("_demo_file_name", "").lower().endswith('.pdf')
+        )
 
-        provider_names = list(PROVIDER_PRESETS.keys())
+        if _is_bill_upload:
+            if analysis_mode == "Bill Comparison":
+                st.markdown("### 📊 Bill Comparison Mode")
+                st.caption(
+                    "Upload multiple bills to compare costs, consumption, and rates "
+                    "across billing periods."
+                )
+            else:
+                st.markdown("### 📄 Bill Extraction Mode")
+                st.caption(
+                    "Tariff rates are extracted directly from the uploaded bill. "
+                    "Upload a CSV or Excel file to configure rates manually."
+                )
+            st.divider()
 
-        # Initialise session state for tariff (set defaults before widgets)
+        # Initialise session state for tariff (needed even when hidden)
         default_rates = PROVIDER_PRESETS['Electric Ireland']
         if 'tariff_provider' not in st.session_state:
             st.session_state.tariff_provider = 'Electric Ireland'
@@ -493,66 +539,101 @@ def main():
         if '_tariff_peak_widget' not in st.session_state:
             st.session_state._tariff_peak_widget = default_rates['peak']
 
-        def _on_provider_change():
-            """Callback: update rate widget keys when provider changes."""
-            provider = st.session_state._tariff_provider_widget
-            if provider != 'Custom':
-                preset = PROVIDER_PRESETS[provider]
-                st.session_state._tariff_day_widget = preset['day']
-                st.session_state._tariff_night_widget = preset['night']
-                st.session_state._tariff_peak_widget = preset['peak']
-            st.session_state.tariff_provider = provider
+        if not _is_bill_upload:
+            # Tariff rate inputs (hidden during bill extraction)
+            st.markdown("### Tariff Rates")
 
-        def _on_rate_change():
-            """Callback: switch to Custom when user manually edits a rate."""
-            if st.session_state.tariff_provider != 'Custom':
-                current_preset = PROVIDER_PRESETS.get(st.session_state.tariff_provider, {})
-                if (abs(st.session_state._tariff_day_widget - current_preset.get('day', 0)) > 0.001 or
-                    abs(st.session_state._tariff_night_widget - current_preset.get('night', 0)) > 0.001 or
-                    abs(st.session_state._tariff_peak_widget - current_preset.get('peak', 0)) > 0.001):
-                    st.session_state.tariff_provider = 'Custom'
+            provider_names = list(PROVIDER_PRESETS.keys())
 
-        provider = st.selectbox(
-            "Electricity Provider",
-            options=provider_names,
-            index=provider_names.index(st.session_state.tariff_provider),
-            key='_tariff_provider_widget',
-            on_change=_on_provider_change,
-        )
+            def _on_provider_change():
+                """Callback: update rate widget keys when provider changes."""
+                provider = st.session_state._tariff_provider_widget
+                if provider != 'Custom':
+                    preset = PROVIDER_PRESETS[provider]
+                    st.session_state._tariff_day_widget = preset['day']
+                    st.session_state._tariff_night_widget = preset['night']
+                    st.session_state._tariff_peak_widget = preset['peak']
+                st.session_state.tariff_provider = provider
 
-        st.number_input(
-            "Day rate (c/kWh)",
-            min_value=0.0, max_value=100.0,
-            step=0.5, format="%.2f",
-            key='_tariff_day_widget',
-            on_change=_on_rate_change,
-        )
-        st.number_input(
-            "Night rate (c/kWh)",
-            min_value=0.0, max_value=100.0,
-            step=0.5, format="%.2f",
-            key='_tariff_night_widget',
-            on_change=_on_rate_change,
-        )
-        st.number_input(
-            "Peak rate (c/kWh)",
-            min_value=0.0, max_value=100.0,
-            step=0.5, format="%.2f",
-            key='_tariff_peak_widget',
-            on_change=_on_rate_change,
-        )
+            def _on_rate_change():
+                """Callback: switch to Custom when user manually edits a rate."""
+                if st.session_state.tariff_provider != 'Custom':
+                    current_preset = PROVIDER_PRESETS.get(st.session_state.tariff_provider, {})
+                    if (abs(st.session_state._tariff_day_widget - current_preset.get('day', 0)) > 0.001 or
+                        abs(st.session_state._tariff_night_widget - current_preset.get('night', 0)) > 0.001 or
+                        abs(st.session_state._tariff_peak_widget - current_preset.get('peak', 0)) > 0.001):
+                        st.session_state.tariff_provider = 'Custom'
 
-        st.caption("Rates inc. VAT. Verify against client's bill.")
-        st.divider()
+            provider = st.selectbox(
+                "Electricity Provider",
+                options=provider_names,
+                index=provider_names.index(st.session_state.tariff_provider),
+                key='_tariff_provider_widget',
+                on_change=_on_provider_change,
+            )
 
-    # Main content
-    if uploaded_file is None:
-        show_welcome()
+            st.number_input(
+                "Day rate (c/kWh)",
+                min_value=0.0, max_value=100.0,
+                step=0.5, format="%.2f",
+                key='_tariff_day_widget',
+                on_change=_on_rate_change,
+            )
+            st.number_input(
+                "Night rate (c/kWh)",
+                min_value=0.0, max_value=100.0,
+                step=0.5, format="%.2f",
+                key='_tariff_night_widget',
+                on_change=_on_rate_change,
+            )
+            st.number_input(
+                "Peak rate (c/kWh)",
+                min_value=0.0, max_value=100.0,
+                step=0.5, format="%.2f",
+                key='_tariff_peak_widget',
+                on_change=_on_rate_change,
+            )
+
+            st.caption("Rates inc. VAT. Verify against client's bill.")
+            st.divider()
+
+    # Main content — handle comparison mode or single file
+    if analysis_mode == "Bill Comparison":
+        if uploaded_files and len(uploaded_files) >= 2:
+            _handle_bill_comparison(uploaded_files)
+        elif uploaded_files:
+            st.info("Upload at least 2 electricity bills (PDF) for comparison.")
+        else:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.markdown("---")
+                st.markdown("### 📊 Bill Comparison")
+                st.markdown(
+                    "Upload 2 or more electricity bill PDFs using the sidebar "
+                    "to compare costs, consumption, and rates across billing periods."
+                )
+                st.markdown("")
+                st.markdown("**What you'll see:**")
+                st.markdown("- Side-by-side summary of all bills")
+                st.markdown("- Cost trends over time")
+                st.markdown("- Consumption trends (kWh)")
+                st.markdown("- Rate change analysis")
+                st.markdown("- Excel export of comparison data")
+                st.markdown("---")
         return
 
-    # Read file content once
-    file_content = uploaded_file.getvalue()
-    filename = uploaded_file.name
+    if uploaded_file is not None:
+        file_content = uploaded_file.getvalue()
+        filename = uploaded_file.name
+        # Clear demo state when user uploads a real file
+        st.session_state.pop("_demo_file_content", None)
+        st.session_state.pop("_demo_file_name", None)
+    elif st.session_state.get("_demo_file_content") is not None:
+        file_content = st.session_state._demo_file_content
+        filename = st.session_state._demo_file_name
+    else:
+        show_welcome()
+        return
 
     # Detect file type and route accordingly
     if filename.lower().endswith('.pdf'):
@@ -581,6 +662,9 @@ def _handle_hdf_file(file_content: bytes, filename: str):
     result = st.session_state._hdf_cached_result
     full_df = result.df
 
+    # --- Sidebar: bill verification uploader ---
+    verification_result = _handle_verification_sidebar(full_df)
+
     # Date range filter (sidebar)
     df = _render_date_filter_sidebar(full_df)
 
@@ -595,14 +679,25 @@ def _handle_hdf_file(file_content: bytes, filename: str):
 
     st.success(f"✓ Showing {len(df):,} readings from {stats['start_date'].strftime('%d %b %Y')} to {stats['end_date'].strftime('%d %b %Y')}")
 
-    # Tabs for different sections
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Overview",
-        "🔥 Heatmap",
-        "📈 Charts",
-        "⚠️ Insights",
-        "📥 Export"
-    ])
+    # Tabs for different sections — add Bill Verification if a bill is loaded
+    has_verification = verification_result is not None
+    if has_verification:
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "📊 Overview",
+            "🔥 Heatmap",
+            "📈 Charts",
+            "⚠️ Insights",
+            "📥 Export",
+            "🔍 Bill Verification",
+        ])
+    else:
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Overview",
+            "🔥 Heatmap",
+            "📈 Charts",
+            "⚠️ Insights",
+            "📥 Export"
+        ])
 
     with tab1:
         show_overview(stats, anomalies)
@@ -614,6 +709,79 @@ def _handle_hdf_file(file_content: bytes, filename: str):
         show_insights(df, stats, anomalies)
     with tab5:
         show_export(df, stats)
+
+    if has_verification:
+        with tab6:
+            show_bill_verification(full_df, verification_result)
+
+
+def _handle_verification_sidebar(hdf_df: pd.DataFrame) -> VerificationResult | None:
+    """Render the bill verification uploader in the sidebar.
+
+    Returns a VerificationResult if a valid bill has been uploaded and
+    cross-referenced, or None otherwise.
+    """
+    hdf_stats = get_summary_stats(hdf_df)
+    hdf_mprn = hdf_stats.get('mprn', '')
+
+    with st.sidebar:
+        st.markdown("### 🔍 Verify a Bill")
+        st.caption("Upload a bill PDF to cross-check against this meter data.")
+
+        verification_pdf = st.file_uploader(
+            "Bill PDF for verification",
+            type=['pdf'],
+            key="verification_bill_uploader",
+            label_visibility="collapsed",
+        )
+
+        if verification_pdf is None:
+            # Clear cached verification when file is removed
+            st.session_state.pop("_verification_result", None)
+            st.session_state.pop("_verification_bill", None)
+            st.session_state.pop("_verification_cache_key", None)
+            return None
+
+        # Cache to avoid re-extraction on every rerun
+        v_content = verification_pdf.getvalue()
+        v_key = f"verify_{verification_pdf.name}_{len(v_content)}"
+
+        if st.session_state.get("_verification_cache_key") != v_key:
+            try:
+                with st.spinner("Extracting bill for verification..."):
+                    pipeline_result = extract_bill_pipeline(v_content)
+                    bill = generic_to_legacy(pipeline_result.bill)
+
+                    # Validate cross-reference
+                    v_result = validate_cross_reference(hdf_df, hdf_mprn, bill)
+
+                    if v_result.valid:
+                        v_result = compute_verification(hdf_df, bill, v_result)
+
+                    st.session_state._verification_cache_key = v_key
+                    st.session_state._verification_result = v_result
+                    st.session_state._verification_bill = bill
+            except Exception as e:
+                st.error(f"Error extracting bill: {str(e)}")
+                return None
+
+        v_result = st.session_state.get("_verification_result")
+        bill = st.session_state.get("_verification_bill")
+
+        if v_result and not v_result.valid:
+            st.error(v_result.block_reason)
+            return None
+
+        if v_result and v_result.valid:
+            st.success(
+                f"MPRN match: {v_result.hdf_mprn}\n\n"
+                f"Coverage: {v_result.overlap_pct:.0f}% "
+                f"({v_result.overlap_days}/{v_result.billing_days} days)"
+            )
+
+        st.divider()
+
+        return v_result
 
 
 def _handle_excel_file(file_content: bytes, filename: str):
@@ -988,6 +1156,39 @@ def show_welcome():
 
         st.markdown("---")
 
+        # Demo buttons
+        st.markdown("#### Try It Now")
+        demo_col1, demo_col2 = st.columns(2)
+
+        _sample_dir = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+        _hdf_path = os.path.join(os.path.dirname(__file__), "..",
+                                 "HDF_calckWh_10306268587_03-02-2026.csv")
+
+        with demo_col1:
+            if os.path.exists(_hdf_path):
+                if st.button("📊 Try sample HDF data", use_container_width=True):
+                    with open(_hdf_path, "rb") as f:
+                        st.session_state._demo_file_content = f.read()
+                    st.session_state._demo_file_name = "HDF_sample.csv"
+                    st.rerun()
+            else:
+                st.button("📊 Sample HDF (not found)", disabled=True,
+                          use_container_width=True)
+
+        with demo_col2:
+            _sample_bill = os.path.join(_sample_dir, "1845.pdf")
+            if os.path.exists(_sample_bill):
+                if st.button("📄 Try sample bill", use_container_width=True):
+                    with open(_sample_bill, "rb") as f:
+                        st.session_state._demo_file_content = f.read()
+                    st.session_state._demo_file_name = "sample_bill.pdf"
+                    st.rerun()
+            else:
+                st.button("📄 Sample bill (not found)", disabled=True,
+                          use_container_width=True)
+
+        st.markdown("---")
+
         st.markdown("#### Supported Formats")
         st.markdown("""
         **ESB Networks HDF** (recommended)
@@ -1019,39 +1220,71 @@ def _handle_bill_pdf(file_content: bytes, filename: str):
                 bill = generic_to_legacy(pipeline_result.bill)
                 st.session_state._bill_cache_key = bill_key
                 st.session_state._bill_cached_result = bill
+                st.session_state._bill_raw_text = pipeline_result.bill.raw_text
         except Exception as e:
             st.error(f"Error extracting bill: {str(e)}")
             st.info("Please ensure this is a valid electricity bill PDF.")
             return
 
     bill = st.session_state._bill_cached_result
-    show_bill_summary(bill)
+    raw_text = st.session_state.get("_bill_raw_text")
+    show_bill_summary(bill, raw_text=raw_text)
 
 
-def show_bill_summary(bill: BillData):
+def show_bill_summary(bill: BillData, raw_text: str | None = None):
     """Display extracted bill data as a clean single-page summary."""
 
-    # --- Header ---
-    extracted_count = sum(
-        1 for k, v in asdict(bill).items()
-        if k not in ('extraction_method', 'confidence_score', 'warnings') and v is not None
-    )
-    total_fields = len(bill.__dataclass_fields__) - 3  # exclude metadata fields
+    # --- Header with per-section breakdown ---
     confidence_pct = round(bill.confidence_score * 100)
-
     supplier_label = bill.supplier or "Unknown supplier"
+
+    # Per-section field counts for actionable breakdown
+    _sections = {
+        "Account": ["supplier", "customer_name", "mprn", "account_number",
+                     "meter_number", "invoice_number"],
+        "Billing": ["bill_date", "billing_period_start", "billing_period_end"],
+        "Consumption": ["day_units_kwh", "night_units_kwh", "peak_units_kwh",
+                        "total_units_kwh"],
+        "Costs": ["day_cost", "night_cost", "peak_cost", "subtotal_before_vat",
+                  "standing_charge_total", "pso_levy", "vat_amount",
+                  "total_this_period"],
+        "Balance": ["previous_balance", "payments_received", "amount_due"],
+    }
+    bill_dict = asdict(bill)
+    section_parts = []
+    total_extracted = 0
+    total_expected = 0
+    for section_name, fields in _sections.items():
+        count = sum(1 for f in fields if bill_dict.get(f) is not None)
+        section_parts.append(f"{section_name}: {count}/{len(fields)}")
+        total_extracted += count
+        total_expected += len(fields)
+
+    section_summary = " · ".join(section_parts)
 
     if confidence_pct >= 80:
         st.success(
-            f"Extracted {extracted_count}/{total_fields} fields from "
-            f"{supplier_label} bill (confidence: {confidence_pct}%)"
+            f"**{supplier_label}** — {total_extracted}/{total_expected} fields "
+            f"(confidence: {confidence_pct}%)\n\n"
+            f"{section_summary}"
         )
     else:
         st.warning(
-            f"Extracted {extracted_count}/{total_fields} fields from "
-            f"{supplier_label} bill (confidence: {confidence_pct}%). "
+            f"**{supplier_label}** — {total_extracted}/{total_expected} fields "
+            f"(confidence: {confidence_pct}%)\n\n"
+            f"{section_summary}\n\n"
             "Please verify fields marked with a warning icon."
         )
+
+    # --- Extraction Warnings (immediately after confidence banner) ---
+    if bill.warnings:
+        for w in bill.warnings:
+            st.markdown(
+                f'<div style="padding: 0.5rem 0.8rem; border-left: 3px solid #f59e0b; '
+                f'background: #1e2433; border-radius: 0 4px 4px 0; margin-bottom: 0.4rem; '
+                f'color: #e2e8f0; font-size: 0.85rem;">{w}</div>',
+                unsafe_allow_html=True,
+            )
 
     def _fmt(value, prefix="", suffix="", fmt_spec=None):
         """Format a value for display, returning '—' if None."""
@@ -1108,63 +1341,75 @@ def show_bill_summary(bill: BillData):
                 unsafe_allow_html=True,
             )
 
-    # --- Section 2: Billing Period ---
-    st.subheader("📅 Billing Period")
-    cols = st.columns(3)
-    with cols[0]:
-        st.markdown(_field_html("Bill Date", bill.bill_date), unsafe_allow_html=True)
-    with cols[1]:
-        period = "—"
-        if bill.billing_period_start and bill.billing_period_end:
-            period = f"{bill.billing_period_start} → {bill.billing_period_end}"
-        elif bill.billing_period_start:
-            period = bill.billing_period_start
-        st.markdown(
-            _field_html("Period", period,
-                        warn='billing_period_start' in warn_fields or 'billing_period_end' in warn_fields),
-            unsafe_allow_html=True,
-        )
-    with cols[2]:
-        days = None
-        if bill.billing_period_start and bill.billing_period_end:
-            try:
+    # --- Section 2: Billing Period (hide if all empty) ---
+    _has_billing = any(v is not None for v in [
+        bill.bill_date, bill.billing_period_start, bill.billing_period_end,
+    ])
+    if _has_billing:
+        st.subheader("📅 Billing Period")
+        cols = st.columns(3)
+        with cols[0]:
+            st.markdown(_field_html("Bill Date", bill.bill_date), unsafe_allow_html=True)
+        with cols[1]:
+            period = "—"
+            if bill.billing_period_start and bill.billing_period_end:
+                period = f"{bill.billing_period_start} → {bill.billing_period_end}"
+            elif bill.billing_period_start:
+                period = bill.billing_period_start
+            st.markdown(
+                _field_html("Period", period,
+                            warn='billing_period_start' in warn_fields or 'billing_period_end' in warn_fields),
+                unsafe_allow_html=True,
+            )
+        with cols[2]:
+            days = None
+            if bill.billing_period_start and bill.billing_period_end:
                 from datetime import datetime as dt
-                start = dt.strptime(bill.billing_period_start, "%d/%m/%Y")
-                end = dt.strptime(bill.billing_period_end, "%d/%m/%Y")
-                days = (end - start).days
-            except (ValueError, TypeError):
-                pass
-        st.markdown(
-            _field_html("Days", f"{days}" if days else None),
-            unsafe_allow_html=True,
-        )
+                _date_fmts = ["%d/%m/%Y", "%d %b %Y", "%d.%m.%Y", "%d %B %Y"]
+                for fmt in _date_fmts:
+                    try:
+                        start = dt.strptime(bill.billing_period_start, fmt)
+                        end = dt.strptime(bill.billing_period_end, fmt)
+                        days = (end - start).days
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            st.markdown(
+                _field_html("Days", f"{days}" if days else None),
+                unsafe_allow_html=True,
+            )
 
-    # --- Section 3: Consumption ---
-    st.subheader("⚡ Consumption")
-    cols = st.columns(4)
-    consumption_fields = [
-        ("Day Units", bill.day_units_kwh, "kWh"),
-        ("Night Units", bill.night_units_kwh, "kWh"),
-        ("Peak Units", bill.peak_units_kwh, "kWh"),
-        ("Total Units", bill.total_units_kwh, "kWh"),
-    ]
-    for i, (label, value, unit) in enumerate(consumption_fields):
-        with cols[i]:
-            display = _fmt(value, suffix=f" {unit}", fmt_spec=",.1f") if value is not None else None
-            st.markdown(_field_html(label, display), unsafe_allow_html=True)
-
-    # Rates row
-    if any(v is not None for v in [bill.day_rate, bill.night_rate, bill.peak_rate]):
+    # --- Section 3: Consumption (hide if all empty) ---
+    _has_consumption = any(v is not None for v in [
+        bill.day_units_kwh, bill.night_units_kwh, bill.peak_units_kwh,
+        bill.total_units_kwh, bill.day_rate, bill.night_rate, bill.peak_rate,
+    ])
+    if _has_consumption:
+        st.subheader("⚡ Consumption")
         cols = st.columns(4)
-        rate_fields = [
-            ("Day Rate", bill.day_rate),
-            ("Night Rate", bill.night_rate),
-            ("Peak Rate", bill.peak_rate),
+        consumption_fields = [
+            ("Day Units", bill.day_units_kwh, "kWh"),
+            ("Night Units", bill.night_units_kwh, "kWh"),
+            ("Peak Units", bill.peak_units_kwh, "kWh"),
+            ("Total Units", bill.total_units_kwh, "kWh"),
         ]
-        for i, (label, value) in enumerate(rate_fields):
+        for i, (label, value, unit) in enumerate(consumption_fields):
             with cols[i]:
-                display = f"€{value:.4f}/kWh" if value is not None else None
+                display = _fmt(value, suffix=f" {unit}", fmt_spec=",.1f") if value is not None else None
                 st.markdown(_field_html(label, display), unsafe_allow_html=True)
+
+        # Rates row
+        if any(v is not None for v in [bill.day_rate, bill.night_rate, bill.peak_rate]):
+            cols = st.columns(4)
+            rate_fields = [
+                ("Day Rate", bill.day_rate),
+                ("Night Rate", bill.night_rate),
+                ("Peak Rate", bill.peak_rate),
+            ]
+            for i, (label, value) in enumerate(rate_fields):
+                with cols[i]:
+                    display = f"€{value:.4f}/kWh" if value is not None else None
+                    st.markdown(_field_html(label, display), unsafe_allow_html=True)
 
     # --- Section 4: Costs ---
     st.subheader("💰 Costs")
@@ -1226,37 +1471,30 @@ def show_bill_summary(bill: BillData):
                 unsafe_allow_html=True,
             )
 
-    # --- Section 5: Balance ---
-    st.subheader("🏦 Balance")
-    cols = st.columns(3)
-    with cols[0]:
-        display = f"€{bill.previous_balance:,.2f}" if bill.previous_balance is not None else None
-        st.markdown(_field_html("Previous Balance", display), unsafe_allow_html=True)
-    with cols[1]:
-        display = f"€{bill.payments_received:,.2f}" if bill.payments_received is not None else None
-        st.markdown(_field_html("Payments Received", display), unsafe_allow_html=True)
-    with cols[2]:
-        if bill.amount_due is not None:
-            st.markdown(
-                f'<div style="border-left: 3px solid #4ade80; padding-left: 0.5rem;">'
-                f'<span style="color: #94a3b8; font-size: 0.8rem;">Amount Due</span><br>'
-                f'<span style="color: #4ade80; font-family: \'JetBrains Mono\', monospace; '
-                f'font-size: 1.3rem; font-weight: 700;">€{bill.amount_due:,.2f}</span></div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(_field_html("Amount Due", None), unsafe_allow_html=True)
-
-    # --- Warnings ---
-    if bill.warnings:
-        st.subheader("⚠️ Extraction Warnings")
-        for w in bill.warnings:
-            st.markdown(
-                f'<div style="padding: 0.5rem 0.8rem; border-left: 3px solid #f59e0b; '
-                f'background: #1e2433; border-radius: 0 4px 4px 0; margin-bottom: 0.4rem; '
-                f'color: #e2e8f0; font-size: 0.85rem;">{w}</div>',
-                unsafe_allow_html=True,
-            )
+    # --- Section 5: Balance (hide if all empty) ---
+    _has_balance = any(v is not None for v in [
+        bill.previous_balance, bill.payments_received, bill.amount_due,
+    ])
+    if _has_balance:
+        st.subheader("🏦 Balance")
+        cols = st.columns(3)
+        with cols[0]:
+            display = f"€{bill.previous_balance:,.2f}" if bill.previous_balance is not None else None
+            st.markdown(_field_html("Previous Balance", display), unsafe_allow_html=True)
+        with cols[1]:
+            display = f"€{bill.payments_received:,.2f}" if bill.payments_received is not None else None
+            st.markdown(_field_html("Payments Received", display), unsafe_allow_html=True)
+        with cols[2]:
+            if bill.amount_due is not None:
+                st.markdown(
+                    f'<div style="border-left: 3px solid #4ade80; padding-left: 0.5rem;">'
+                    f'<span style="color: #94a3b8; font-size: 0.8rem;">Amount Due</span><br>'
+                    f'<span style="color: #4ade80; font-family: \'JetBrains Mono\', monospace; '
+                    f'font-size: 1.3rem; font-weight: 700;">€{bill.amount_due:,.2f}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(_field_html("Amount Due", None), unsafe_allow_html=True)
 
     # --- Export ---
     st.divider()
@@ -1275,6 +1513,11 @@ def show_bill_summary(bill: BillData):
         f"Extraction method: {bill.extraction_method} · "
         f"Confidence: {confidence_pct}%"
     )
+
+    # --- Raw Text Debug (collapsed by default) ---
+    if raw_text:
+        with st.expander("🔍 Raw Extracted Text", expanded=False):
+            st.code(raw_text, language=None)
 
 
 def generate_bill_excel(bill: BillData) -> io.BytesIO:
@@ -1560,10 +1803,91 @@ def show_heatmap(df: pd.DataFrame):
     fig = create_heatmap(df)
     st.plotly_chart(fig, use_container_width=True)
 
-    st.info("""
-    **Reading the heatmap:** Darker colors indicate higher consumption.
-    Look for unexpected patterns like high usage at 3am on weekends, which might indicate waste.
-    """)
+    # Auto-generated interpretation from actual data
+    _heatmap_interpretation(df)
+
+
+def _heatmap_interpretation(df: pd.DataFrame):
+    """Generate data-driven heatmap interpretation text."""
+    if 'hour' not in df.columns or 'import_kwh' not in df.columns:
+        return
+
+    try:
+        day_col = 'day_of_week' if 'day_of_week' in df.columns else None
+
+        # Peak usage: hour with highest average consumption
+        hourly_avg = df.groupby('hour')['import_kwh'].mean()
+        peak_hour = int(hourly_avg.idxmax())
+        peak_kwh = hourly_avg.max()
+
+        # Night usage (23:00-06:00) vs day usage (07:00-22:00)
+        night_hours = [23, 0, 1, 2, 3, 4, 5, 6]
+        day_hours = list(range(7, 23))
+        night_avg = hourly_avg.reindex(night_hours).mean()
+        day_avg = hourly_avg.reindex(day_hours).mean()
+
+        # Lowest usage hour
+        min_hour = int(hourly_avg.idxmin())
+        min_kwh = hourly_avg.min()
+
+        parts = []
+        parts.append(
+            f"**Peak usage** is at **{peak_hour:02d}:00** "
+            f"averaging **{peak_kwh:.2f} kWh** per interval."
+        )
+        parts.append(
+            f"**Lowest usage** is at **{min_hour:02d}:00** "
+            f"({min_kwh:.2f} kWh)."
+        )
+
+        if night_avg > 0:
+            night_pct = (night_avg / day_avg * 100) if day_avg > 0 else 0
+            if night_pct > 60:
+                parts.append(
+                    f"Night-time usage ({night_avg:.2f} kWh avg) is "
+                    f"**{night_pct:.0f}% of daytime** — this is high and may "
+                    "indicate always-on loads worth investigating."
+                )
+            elif night_pct > 30:
+                parts.append(
+                    f"Night-time usage ({night_avg:.2f} kWh avg) is "
+                    f"**{night_pct:.0f}% of daytime** — moderate baseload."
+                )
+            else:
+                parts.append(
+                    f"Night-time usage ({night_avg:.2f} kWh avg) is "
+                    f"**{night_pct:.0f}% of daytime** — low baseload, typical "
+                    "for premises that shut down overnight."
+                )
+
+        # Weekday vs weekend if day_of_week available
+        if day_col:
+            weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+            weekends = ['Saturday', 'Sunday']
+            wd_mask = df[day_col].isin(weekdays)
+            we_mask = df[day_col].isin(weekends)
+            if wd_mask.any() and we_mask.any():
+                wd_avg = df.loc[wd_mask, 'import_kwh'].mean()
+                we_avg = df.loc[we_mask, 'import_kwh'].mean()
+                if we_avg > wd_avg * 1.1:
+                    parts.append(
+                        f"Weekend usage ({we_avg:.2f} kWh) is "
+                        f"**higher than weekdays** ({wd_avg:.2f} kWh)."
+                    )
+                elif wd_avg > we_avg * 1.1:
+                    parts.append(
+                        f"Weekday usage ({wd_avg:.2f} kWh) is "
+                        f"**higher than weekends** ({we_avg:.2f} kWh), "
+                        "consistent with a commercial profile."
+                    )
+
+        st.info("**Heatmap insights:** " + " ".join(parts))
+    except Exception:
+        # Fallback to generic guidance
+        st.info(
+            "**Reading the heatmap:** Darker colors indicate higher consumption. "
+            "Look for unexpected patterns like high usage at 3am on weekends."
+        )
 
 
 def show_charts(df: pd.DataFrame, stats: dict, anomalies: list = None):
@@ -1848,6 +2172,235 @@ def show_export(df: pd.DataFrame, stats: dict):
     st.caption("Right-click on any chart and select 'Download plot as PNG' to save individual charts.")
 
 
+def show_bill_verification(hdf_df: pd.DataFrame, v: VerificationResult):
+    """Display the Bill Verification tab content."""
+    st.header("Bill Verification")
+    st.caption("Cross-referencing meter readings against billed amounts")
+
+    # --- Warnings ---
+    for issue in v.issues:
+        st.warning(issue)
+
+    # --- 1. Match Status ---
+    st.subheader("Match Status")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("MPRN", v.hdf_mprn)
+    with col2:
+        st.metric("Data Coverage", f"{v.overlap_pct:.0f}%")
+    with col3:
+        st.metric("Billing Days", f"{v.overlap_days}/{v.billing_days}")
+
+    if v.bill_start and v.bill_end:
+        st.caption(
+            f"Bill period: {v.bill_start.strftime('%d %b %Y')} — "
+            f"{v.bill_end.strftime('%d %b %Y')}"
+        )
+
+    st.divider()
+
+    # --- 2. Consumption Comparison ---
+    st.subheader("Consumption Comparison")
+    st.caption("Meter readings vs billed consumption by tariff period")
+
+    deltas = get_consumption_deltas(v)
+    delta_df = pd.DataFrame(deltas)
+
+    # Style: highlight significant differences
+    st.dataframe(
+        delta_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'Period': st.column_config.TextColumn(width="small"),
+            'Meter (kWh)': st.column_config.NumberColumn(format="%.1f"),
+            'Bill (kWh)': st.column_config.NumberColumn(format="%.1f"),
+            'Delta (kWh)': st.column_config.NumberColumn(format="%+.1f"),
+            'Delta (%)': st.column_config.NumberColumn(format="%+.1f%%"),
+        },
+    )
+
+    # Consumption summary metrics
+    if v.hdf_total_kwh and v.bill_total_kwh:
+        delta_kwh = v.bill_total_kwh - v.hdf_total_kwh
+        delta_pct = (delta_kwh / v.hdf_total_kwh) * 100 if v.hdf_total_kwh else 0
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Meter Total", f"{v.hdf_total_kwh:,.1f} kWh")
+        with col2:
+            st.metric("Bill Total", f"{v.bill_total_kwh:,.1f} kWh")
+        with col3:
+            status = "within tolerance" if abs(delta_pct) <= 5 else "DISCREPANCY"
+            st.metric(
+                "Difference",
+                f"{delta_kwh:+,.1f} kWh",
+                delta=f"{delta_pct:+.1f}% — {status}",
+                delta_color="off" if abs(delta_pct) <= 5 else "inverse",
+            )
+
+    # Consumption bar chart
+    if v.bill_day_kwh is not None or v.bill_night_kwh is not None:
+        fig = go.Figure()
+
+        periods = ['Day', 'Night', 'Peak']
+        meter_vals = [v.hdf_day_kwh, v.hdf_night_kwh, v.hdf_peak_kwh]
+        bill_vals = [v.bill_day_kwh, v.bill_night_kwh, v.bill_peak_kwh]
+
+        fig.add_trace(go.Bar(
+            x=periods,
+            y=meter_vals,
+            name='Meter (HDF)',
+            marker_color='#4ade80',
+        ))
+        fig.add_trace(go.Bar(
+            x=periods,
+            y=[bv if bv is not None else 0 for bv in bill_vals],
+            name='Bill',
+            marker_color='#3b82f6',
+        ))
+
+        fig.update_layout(
+            barmode='group',
+            xaxis_title="Tariff Period",
+            yaxis_title="Consumption (kWh)",
+            template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="DM Sans", color="#e2e8f0"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # --- 3. Cost Verification ---
+    st.subheader("Cost Verification")
+    st.caption("Meter consumption x bill rates vs bill stated cost")
+
+    cost_rows = []
+    if v.expected_cost_day is not None:
+        cost_rows.append({
+            'Component': 'Day Energy',
+            'Meter kWh': v.hdf_day_kwh,
+            'Bill Rate': v.bill_day_rate,
+            'Expected Cost': v.expected_cost_day,
+        })
+    if v.expected_cost_night is not None:
+        cost_rows.append({
+            'Component': 'Night Energy',
+            'Meter kWh': v.hdf_night_kwh,
+            'Bill Rate': v.bill_night_rate,
+            'Expected Cost': v.expected_cost_night,
+        })
+    if v.expected_cost_peak is not None:
+        cost_rows.append({
+            'Component': 'Peak Energy',
+            'Meter kWh': v.hdf_peak_kwh,
+            'Bill Rate': v.bill_peak_rate,
+            'Expected Cost': v.expected_cost_peak,
+        })
+
+    if cost_rows:
+        cost_df = pd.DataFrame(cost_rows)
+        st.dataframe(
+            cost_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'Component': st.column_config.TextColumn(width="small"),
+                'Meter kWh': st.column_config.NumberColumn(format="%.1f"),
+                'Bill Rate': st.column_config.NumberColumn(format="%.4f"),
+                'Expected Cost': st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+    if v.expected_cost_total is not None:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "Expected Energy Cost",
+                f"\u20ac{v.expected_cost_total:,.2f}",
+            )
+        with col2:
+            if v.bill_cost_total is not None:
+                st.metric("Bill Total", f"\u20ac{v.bill_cost_total:,.2f}")
+            else:
+                st.metric("Bill Total", "\u2014")
+        with col3:
+            if v.bill_cost_total is not None and v.expected_cost_total:
+                cost_delta = v.bill_cost_total - v.expected_cost_total
+                st.metric(
+                    "Difference",
+                    f"\u20ac{cost_delta:+,.2f}",
+                    delta="includes standing charge, PSO, VAT" if cost_delta > 0 else None,
+                    delta_color="off",
+                )
+
+    st.divider()
+
+    # --- 4. Rate Comparison ---
+    st.subheader("Rate Comparison")
+    st.caption("Bill rates vs provider preset rates")
+
+    bill = st.session_state.get("_verification_bill")
+    supplier = bill.supplier if bill else None
+    rate_rows = get_rate_comparison(v, provider=supplier)
+    rate_df = pd.DataFrame(rate_rows)
+
+    st.dataframe(
+        rate_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'Period': st.column_config.TextColumn(width="small"),
+            'Bill Rate (EUR/kWh)': st.column_config.NumberColumn(format="%.4f"),
+            'Preset Rate (EUR/kWh)': st.column_config.NumberColumn(format="%.4f"),
+        },
+    )
+
+    st.divider()
+
+    # --- 5. Export / Solar Check ---
+    if v.hdf_export_kwh and v.hdf_export_kwh > 0:
+        st.subheader("Export / Solar Check")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Meter Export", f"{v.hdf_export_kwh:,.1f} kWh")
+        with col2:
+            if v.bill_export_units is not None:
+                st.metric("Bill Export", f"{v.bill_export_units:,.1f} kWh")
+            else:
+                st.metric("Bill Export", "\u2014")
+
+        if v.bill_export_credit is not None:
+            from hdf_parser import CEG_RATE_EUR
+            expected_credit = v.hdf_export_kwh * CEG_RATE_EUR
+            st.caption(
+                f"Expected export credit at CEG rate (\u20ac{CEG_RATE_EUR}/kWh): "
+                f"\u20ac{expected_credit:,.2f} | Bill states: \u20ac{v.bill_export_credit:,.2f}"
+            )
+
+        st.divider()
+
+    # --- 6. Standing Charge Check ---
+    if v.bill_standing_days is not None:
+        st.subheader("Standing Charge Check")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Bill Standing Days", v.bill_standing_days)
+        with col2:
+            st.metric("Billing Period Days", v.billing_days)
+
+        if v.bill_standing_days != v.billing_days:
+            st.warning(
+                f"Standing charge days ({v.bill_standing_days}) "
+                f"differs from billing period length ({v.billing_days} days)."
+            )
+        else:
+            st.success("Standing charge days match billing period length.")
+
+
 def show_export_flexible(df: pd.DataFrame, stats: dict, granularity: DataGranularity):
     """Show export options with graceful degradation."""
     st.header("Export Data")
@@ -2035,6 +2588,543 @@ def generate_excel_export_flexible(
                 except TypeError:
                     pass  # Already tz-naive
             export_df.to_excel(writer, sheet_name='Raw Data', index=False)
+
+    buffer.seek(0)
+    return buffer
+
+
+# ---------------------------------------------------------------------------
+# Multi-bill comparison
+# ---------------------------------------------------------------------------
+
+
+def _parse_bill_date(date_str):
+    """Try to parse a date string from bill extraction. Returns date or None."""
+    if not date_str:
+        return None
+    from datetime import datetime as dt
+    formats = [
+        "%d/%m/%Y", "%d %b %Y", "%d %B %Y", "%d.%m.%Y",
+        "%Y-%m-%d", "%d-%m-%Y",
+    ]
+    for fmt in formats:
+        try:
+            return dt.strptime(date_str.strip(), fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _bill_label(row) -> str:
+    """Generate a short label for a bill in comparison charts."""
+    if row.get('period_start') is not None and pd.notna(row['period_start']):
+        return row['period_start'].strftime('%b %Y')
+    if row.get('bill_date') and row['bill_date']:
+        parsed = _parse_bill_date(row['bill_date'])
+        if parsed:
+            return parsed.strftime('%b %Y')
+        return str(row['bill_date'])[:10]
+    return str(row['filename'])[:20]
+
+
+def _handle_bill_comparison(uploaded_files):
+    """Handle multiple PDF bills for side-by-side comparison."""
+    file_data = [(f.getvalue(), f.name) for f in uploaded_files]
+    content_hash = hashlib.md5(
+        b"".join(content for content, _ in file_data)
+    ).hexdigest()
+    cache_key = f"comparison_{content_hash}"
+
+    if st.session_state.get("_comparison_cache_key") != cache_key:
+        bills = []
+        errors = []
+        progress = st.progress(0, text="Extracting bills...")
+        for i, (content, filename) in enumerate(file_data):
+            progress.progress(
+                (i + 1) / len(file_data),
+                text=f"Extracting {filename}...",
+            )
+            try:
+                pipeline_result = extract_bill_pipeline(content)
+                bill = generic_to_legacy(pipeline_result.bill)
+                bills.append((bill, filename))
+            except Exception as e:
+                errors.append((filename, str(e)))
+        progress.empty()
+        st.session_state._comparison_cache_key = cache_key
+        st.session_state._comparison_bills = bills
+        st.session_state._comparison_errors = errors
+
+    bills = st.session_state._comparison_bills
+    errors = st.session_state.get("_comparison_errors", [])
+
+    if errors:
+        for filename, err in errors:
+            st.warning(f"Failed to extract **{filename}**: {err}")
+
+    if len(bills) < 2:
+        st.error("Need at least 2 successfully extracted bills for comparison.")
+        return
+
+    show_bill_comparison(bills)
+
+
+def show_bill_comparison(bills):
+    """Display multi-bill comparison view with tabs."""
+    st.subheader(f"Bill Comparison — {len(bills)} bills")
+
+    # Build comparison DataFrame
+    rows = []
+    for bill, filename in bills:
+        period_start = _parse_bill_date(bill.billing_period_start)
+        period_end = _parse_bill_date(bill.billing_period_end)
+        bill_date_parsed = _parse_bill_date(bill.bill_date)
+        sort_date = period_start or bill_date_parsed
+
+        rows.append({
+            'filename': filename,
+            'supplier': bill.supplier or 'Unknown',
+            'mprn': bill.mprn or '',
+            'bill_date': bill.bill_date or '',
+            'billing_period': (
+                f"{bill.billing_period_start} — {bill.billing_period_end}"
+                if bill.billing_period_start and bill.billing_period_end
+                else ''
+            ),
+            'sort_date': sort_date,
+            'period_start': period_start,
+            'period_end': period_end,
+            'total_kwh': bill.total_units_kwh,
+            'day_kwh': bill.day_units_kwh,
+            'night_kwh': bill.night_units_kwh,
+            'peak_kwh': bill.peak_units_kwh,
+            'day_rate': bill.day_rate,
+            'night_rate': bill.night_rate,
+            'peak_rate': bill.peak_rate,
+            'standing_charge': bill.standing_charge_total,
+            'subtotal': bill.subtotal_before_vat,
+            'vat': bill.vat_amount,
+            'total_cost': bill.total_this_period,
+            'amount_due': bill.amount_due,
+            'confidence': bill.confidence_score,
+        })
+
+    df = pd.DataFrame(rows)
+
+    # Sort by date if available
+    if df['sort_date'].notna().any():
+        df = df.sort_values('sort_date').reset_index(drop=True)
+
+    # Generate chart labels
+    df['label'] = df.apply(_bill_label, axis=1)
+
+    # Deduplicate labels by appending index when needed
+    label_counts = df['label'].value_counts()
+    if (label_counts > 1).any():
+        seen = {}
+        new_labels = []
+        for label in df['label']:
+            if label_counts[label] > 1:
+                idx = seen.get(label, 0) + 1
+                seen[label] = idx
+                new_labels.append(f"{label} ({idx})")
+            else:
+                new_labels.append(label)
+        df['label'] = new_labels
+
+    # Tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Summary",
+        "Cost Trends",
+        "Consumption",
+        "Rate Analysis",
+        "Export",
+    ])
+
+    with tab1:
+        _comparison_summary(df)
+    with tab2:
+        _comparison_cost_trends(df)
+    with tab3:
+        _comparison_consumption(df)
+    with tab4:
+        _comparison_rates(df)
+    with tab5:
+        _comparison_export(df, bills)
+
+
+def _comparison_summary(df: pd.DataFrame):
+    """Show summary table and key aggregate metrics."""
+    st.markdown("### Side-by-Side Comparison")
+
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        total_cost = df['total_cost'].sum()
+        st.metric(
+            "Total Cost",
+            f"€{total_cost:,.2f}" if pd.notna(total_cost) and total_cost > 0 else "—",
+        )
+    with col2:
+        total_kwh = df['total_kwh'].sum()
+        st.metric(
+            "Total kWh",
+            f"{total_kwh:,.0f}" if pd.notna(total_kwh) and total_kwh > 0 else "—",
+        )
+    with col3:
+        valid_costs = df['total_cost'].dropna()
+        avg_cost = valid_costs.mean() if len(valid_costs) > 0 else None
+        st.metric(
+            "Avg Cost/Bill",
+            f"€{avg_cost:,.2f}" if avg_cost else "—",
+        )
+    with col4:
+        if (
+            df['total_kwh'].notna().any()
+            and df['total_cost'].notna().any()
+            and df['total_kwh'].sum() > 0
+        ):
+            avg_rate = df['total_cost'].sum() / df['total_kwh'].sum()
+            st.metric("Avg €/kWh", f"€{avg_rate:.4f}")
+        else:
+            st.metric("Avg €/kWh", "—")
+
+    st.divider()
+
+    # Display table
+    display_cols = {
+        'filename': 'File',
+        'supplier': 'Supplier',
+        'billing_period': 'Period',
+        'total_kwh': 'Total kWh',
+        'total_cost': 'Total (€)',
+        'day_kwh': 'Day kWh',
+        'night_kwh': 'Night kWh',
+        'standing_charge': 'Standing (€)',
+        'vat': 'VAT (€)',
+        'confidence': 'Confidence',
+    }
+
+    available_cols = [c for c in display_cols if c in df.columns]
+    display_df = df[available_cols].rename(
+        columns={k: v for k, v in display_cols.items() if k in available_cols}
+    )
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'Total kWh': st.column_config.NumberColumn(format="%.1f"),
+            'Total (€)': st.column_config.NumberColumn(format="€%.2f"),
+            'Day kWh': st.column_config.NumberColumn(format="%.1f"),
+            'Night kWh': st.column_config.NumberColumn(format="%.1f"),
+            'Standing (€)': st.column_config.NumberColumn(format="€%.2f"),
+            'VAT (€)': st.column_config.NumberColumn(format="€%.2f"),
+            'Confidence': st.column_config.NumberColumn(format="%.0%%"),
+        },
+    )
+
+
+def _comparison_cost_trends(df: pd.DataFrame):
+    """Show cost trend chart across bills."""
+    st.markdown("### Cost Trends Over Time")
+
+    labels = df['label'].tolist()
+    has_cost = df['total_cost'].notna().any()
+
+    if not has_cost:
+        st.info("No cost data available in the extracted bills.")
+        return
+
+    fig = go.Figure()
+
+    # Total cost
+    fig.add_trace(go.Scatter(
+        x=labels,
+        y=df['total_cost'],
+        mode='lines+markers',
+        name='Total Cost',
+        line=dict(color='#4ade80', width=3),
+        marker=dict(size=10),
+    ))
+
+    # Subtotal
+    if df['subtotal'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=df['subtotal'],
+            mode='lines+markers',
+            name='Subtotal (ex VAT)',
+            line=dict(color='#3b82f6', width=2, dash='dot'),
+            marker=dict(size=8),
+        ))
+
+    # Standing charge
+    if df['standing_charge'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=df['standing_charge'],
+            mode='lines+markers',
+            name='Standing Charge',
+            line=dict(color='#f59e0b', width=2, dash='dash'),
+            marker=dict(size=8),
+        ))
+
+    fig.update_layout(
+        xaxis_title="Billing Period",
+        yaxis_title="Cost (€)",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="DM Sans", color="#e2e8f0"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Cost change summary
+    valid = df.dropna(subset=['total_cost'])
+    if len(valid) >= 2:
+        first_cost = valid.iloc[0]['total_cost']
+        last_cost = valid.iloc[-1]['total_cost']
+        change = last_cost - first_cost
+        change_pct = (change / first_cost * 100) if first_cost else 0
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("First Bill", f"€{first_cost:,.2f}")
+        with col2:
+            st.metric("Latest Bill", f"€{last_cost:,.2f}")
+        with col3:
+            st.metric("Change", f"€{change:+,.2f}", delta=f"{change_pct:+.1f}%")
+
+
+def _comparison_consumption(df: pd.DataFrame):
+    """Show consumption trend charts."""
+    st.markdown("### Consumption Trends")
+
+    labels = df['label'].tolist()
+    has_kwh = df['total_kwh'].notna().any()
+
+    if not has_kwh:
+        st.info("No consumption data available in the extracted bills.")
+        return
+
+    # Total consumption bar chart
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=df['total_kwh'],
+        name='Total kWh',
+        marker_color='#4ade80',
+        text=[f"{v:,.0f}" if pd.notna(v) else "" for v in df['total_kwh']],
+        textposition='auto',
+    ))
+    fig.update_layout(
+        xaxis_title="Billing Period",
+        yaxis_title="Consumption (kWh)",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="DM Sans", color="#e2e8f0"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Day/Night/Peak breakdown
+    has_breakdown = (
+        df['day_kwh'].notna().any()
+        or df['night_kwh'].notna().any()
+        or df['peak_kwh'].notna().any()
+    )
+    if has_breakdown:
+        st.markdown("#### Day/Night/Peak Breakdown")
+
+        fig2 = go.Figure()
+        if df['day_kwh'].notna().any():
+            fig2.add_trace(go.Bar(
+                x=labels, y=df['day_kwh'],
+                name='Day', marker_color='#f59e0b',
+            ))
+        if df['night_kwh'].notna().any():
+            fig2.add_trace(go.Bar(
+                x=labels, y=df['night_kwh'],
+                name='Night', marker_color='#3b82f6',
+            ))
+        if df['peak_kwh'].notna().any():
+            fig2.add_trace(go.Bar(
+                x=labels, y=df['peak_kwh'],
+                name='Peak', marker_color='#ef4444',
+            ))
+
+        fig2.update_layout(
+            barmode='stack',
+            xaxis_title="Billing Period",
+            yaxis_title="Consumption (kWh)",
+            template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="DM Sans", color="#e2e8f0"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # Consumption change summary
+    valid = df.dropna(subset=['total_kwh'])
+    if len(valid) >= 2:
+        st.divider()
+        first = valid.iloc[0]['total_kwh']
+        last = valid.iloc[-1]['total_kwh']
+        change = last - first
+        change_pct = (change / first * 100) if first else 0
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("First Bill", f"{first:,.0f} kWh")
+        with col2:
+            st.metric("Latest Bill", f"{last:,.0f} kWh")
+        with col3:
+            st.metric("Change", f"{change:+,.0f} kWh", delta=f"{change_pct:+.1f}%")
+
+
+def _comparison_rates(df: pd.DataFrame):
+    """Show rate comparison across bills."""
+    st.markdown("### Rate Analysis")
+
+    has_rates = (
+        df['day_rate'].notna().any()
+        or df['night_rate'].notna().any()
+        or df['peak_rate'].notna().any()
+    )
+
+    if not has_rates:
+        st.info("No unit rate data available in the extracted bills.")
+        return
+
+    labels = df['label'].tolist()
+
+    fig = go.Figure()
+
+    if df['day_rate'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=labels, y=df['day_rate'],
+            mode='lines+markers', name='Day Rate',
+            line=dict(color='#f59e0b', width=2),
+            marker=dict(size=8),
+        ))
+
+    if df['night_rate'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=labels, y=df['night_rate'],
+            mode='lines+markers', name='Night Rate',
+            line=dict(color='#3b82f6', width=2),
+            marker=dict(size=8),
+        ))
+
+    if df['peak_rate'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=labels, y=df['peak_rate'],
+            mode='lines+markers', name='Peak Rate',
+            line=dict(color='#ef4444', width=2),
+            marker=dict(size=8),
+        ))
+
+    fig.update_layout(
+        xaxis_title="Billing Period",
+        yaxis_title="Rate (€/kWh)",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="DM Sans", color="#e2e8f0"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Rate change table
+    st.markdown("#### Rate Changes")
+    rate_data = []
+    for rate_name, rate_col in [('Day', 'day_rate'), ('Night', 'night_rate'), ('Peak', 'peak_rate')]:
+        valid = df.dropna(subset=[rate_col])
+        if len(valid) >= 2:
+            first = valid.iloc[0][rate_col]
+            last = valid.iloc[-1][rate_col]
+            change = last - first
+            change_pct = (change / first * 100) if first else 0
+            rate_data.append({
+                'Tariff': rate_name,
+                'First Bill': f"€{first:.4f}",
+                'Latest Bill': f"€{last:.4f}",
+                'Change': f"€{change:+.4f}",
+                'Change %': f"{change_pct:+.1f}%",
+            })
+
+    if rate_data:
+        st.dataframe(pd.DataFrame(rate_data), hide_index=True, use_container_width=True)
+    else:
+        st.caption("Rate changes require at least 2 bills with rate data for the same tariff.")
+
+
+def _comparison_export(df: pd.DataFrame, bills):
+    """Export comparison data as Excel."""
+    st.markdown("### Export Comparison Data")
+
+    if st.button("Generate Comparison Excel", type="primary", key="comparison_export_btn"):
+        buffer = _generate_comparison_excel(df, bills)
+        st.download_button(
+            label="Download Excel File",
+            data=buffer.getvalue(),
+            file_name=f"bill_comparison_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="comparison_download",
+        )
+
+
+def _generate_comparison_excel(df: pd.DataFrame, bills) -> io.BytesIO:
+    """Generate Excel comparison workbook."""
+    buffer = io.BytesIO()
+
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        # Summary sheet
+        summary_cols = [
+            'filename', 'supplier', 'mprn', 'bill_date', 'billing_period',
+            'total_kwh', 'day_kwh', 'night_kwh', 'peak_kwh',
+            'day_rate', 'night_rate', 'peak_rate',
+            'standing_charge', 'subtotal', 'vat', 'total_cost', 'amount_due',
+        ]
+        summary_labels = {
+            'filename': 'File', 'supplier': 'Supplier', 'mprn': 'MPRN',
+            'bill_date': 'Bill Date', 'billing_period': 'Billing Period',
+            'total_kwh': 'Total kWh', 'day_kwh': 'Day kWh',
+            'night_kwh': 'Night kWh', 'peak_kwh': 'Peak kWh',
+            'day_rate': 'Day Rate (€/kWh)', 'night_rate': 'Night Rate (€/kWh)',
+            'peak_rate': 'Peak Rate (€/kWh)',
+            'standing_charge': 'Standing Charge (€)', 'subtotal': 'Subtotal (€)',
+            'vat': 'VAT (€)', 'total_cost': 'Total Cost (€)',
+            'amount_due': 'Amount Due (€)',
+        }
+
+        available = [c for c in summary_cols if c in df.columns]
+        export_df = df[available].rename(
+            columns={k: v for k, v in summary_labels.items() if k in available}
+        )
+        export_df.to_excel(writer, sheet_name='Comparison', index=False)
+
+        # Individual bill sheets
+        for bill, filename in bills:
+            bill_dict = asdict(bill)
+            bill_rows = [
+                (k.replace('_', ' ').title(), v)
+                for k, v in bill_dict.items()
+                if k not in {'extraction_method', 'confidence_score', 'warnings'}
+            ]
+            # Excel sheet name max 31 chars
+            sheet_name = filename[:31].replace('/', '-').replace('\\', '-')
+            pd.DataFrame(bill_rows, columns=['Field', 'Value']).to_excel(
+                writer, sheet_name=sheet_name, index=False,
+            )
 
     buffer.seek(0)
     return buffer

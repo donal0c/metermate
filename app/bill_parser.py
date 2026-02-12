@@ -111,11 +111,17 @@ def generic_to_legacy(generic: GenericBillData) -> "BillData":
             bill.billing_period_start = parts[0].strip()
             bill.billing_period_end = parts[1].strip()
         else:
-            # Try alternate separator
-            parts = generic.billing_period.split("-", 1)
-            if len(parts) == 2 and len(parts[0].strip()) > 4:
+            # Try " to " separator (e.g. "1 Mar 2025 to 31 Mar 2025")
+            parts = generic.billing_period.split(" to ", 1)
+            if len(parts) == 2:
                 bill.billing_period_start = parts[0].strip()
                 bill.billing_period_end = parts[1].strip()
+            else:
+                # Try bare hyphen separator (e.g. "01.03.2025-31.03.2025")
+                parts = generic.billing_period.split("-", 1)
+                if len(parts) == 2 and len(parts[0].strip()) > 4:
+                    bill.billing_period_start = parts[0].strip()
+                    bill.billing_period_end = parts[1].strip()
 
     # --- Line items → flat fields ---
     for item in generic.line_items:

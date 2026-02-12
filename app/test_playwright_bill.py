@@ -73,8 +73,8 @@ class TestAppStartup:
     def test_welcome_page_loads(self, page: Page, streamlit_app: str):
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
-        # The app title should be visible
-        expect(page.locator("text=Energy Insight")).to_be_visible(timeout=15000)
+        # The welcome heading should be visible
+        expect(page.get_by_text("Welcome to Energy Insight")).to_be_visible(timeout=15000)
 
     def test_file_uploader_visible(self, page: Page, streamlit_app: str):
         page.goto(streamlit_app)
@@ -82,6 +82,57 @@ class TestAppStartup:
         # The sidebar should have a file uploader
         uploader = page.locator('[data-testid="stFileUploader"]')
         expect(uploader).to_be_visible(timeout=15000)
+
+    def test_demo_buttons_on_welcome_page(self, page: Page, streamlit_app: str):
+        """Welcome page should show demo buttons for sample data."""
+        page.goto(streamlit_app)
+        page.wait_for_load_state("networkidle")
+
+        content = page.content()
+        assert "Try sample HDF data" in content or "Sample HDF" in content, \
+            "Sample HDF button should be visible on welcome page"
+        assert "Try sample bill" in content or "Sample bill" in content, \
+            "Sample bill button should be visible on welcome page"
+
+    def test_demo_bill_button_loads_data(self, page: Page, streamlit_app: str):
+        """Clicking the sample bill button should load bill extraction view."""
+        page.goto(streamlit_app)
+        page.wait_for_load_state("networkidle")
+
+        # Click the demo bill button
+        bill_button = page.get_by_text("Try sample bill")
+        if bill_button.count() > 0:
+            bill_button.click()
+            page.wait_for_timeout(5000)
+
+            content = page.content()
+            # Should show extraction results (not the welcome page)
+            has_extraction = any(
+                term in content.lower()
+                for term in ["confidence", "mprn", "account"]
+            )
+            assert has_extraction, "Demo bill should load and show extraction results"
+
+    def test_demo_hdf_loads_heatmap_insights(self, page: Page, streamlit_app: str):
+        """Loading demo HDF data should show heatmap with auto-generated insights."""
+        page.goto(streamlit_app)
+        page.wait_for_load_state("networkidle")
+
+        # Click the demo HDF button
+        hdf_button = page.get_by_text("Try sample HDF data")
+        if hdf_button.count() > 0:
+            hdf_button.click()
+            page.wait_for_timeout(5000)
+
+            # Navigate to the Heatmap tab
+            heatmap_tab = page.get_by_text("Heatmap")
+            if heatmap_tab.count() > 0:
+                heatmap_tab.first.click()
+                page.wait_for_timeout(2000)
+
+                content = page.content()
+                assert "Peak usage" in content, \
+                    "Heatmap should show auto-generated peak usage insight"
 
 
 class TestBillPDFUpload:
@@ -133,6 +184,23 @@ class TestBillPDFUpload:
         assert "Energia" in content or "energia" in content.lower(), \
             "Supplier should be detected as Energia"
 
+    def test_energia_billing_period_extracted(self, page: Page, streamlit_app: str):
+        """Billing period and bill date should be extracted for Energia bills."""
+        self._upload_pdf(
+            page, streamlit_app,
+            "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
+        )
+
+        content = page.content()
+        # Billing period dates should appear (split as start → end)
+        assert "1 Mar 2025" in content, \
+            "Billing period start should be displayed"
+        assert "31 Mar 2025" in content, \
+            "Billing period end should be displayed"
+        # Bill date should appear
+        assert "11 Apr 2025" in content, \
+            "Bill date should be extracted and displayed"
+
     def test_extraction_shows_mprn(self, page: Page, streamlit_app: str):
         """MPRN should be displayed in the bill summary."""
         self._upload_pdf(page, streamlit_app, "1845.pdf")
@@ -162,6 +230,54 @@ class TestBillPDFUpload:
 
 class TestBillSummaryDisplay:
     """Test that the bill summary UI displays correctly."""
+
+    def _upload_pdf(self, page: Page, streamlit_app: str, filename: str):
+        """Upload a PDF via the Streamlit file uploader."""
+        pdf_path = os.path.join(BILLS_DIR, filename)
+        if not os.path.exists(pdf_path):
+            pytest.skip(f"PDF not found: {filename}")
+
+        page.goto(streamlit_app)
+        page.wait_for_load_state("networkidle")
+
+        file_input = page.locator('[data-testid="stFileUploader"] input[type="file"]')
+        file_input.set_input_files(pdf_path)
+        page.wait_for_timeout(3000)
+
+    def test_per_section_breakdown_displayed(self, page: Page, streamlit_app: str):
+        """Confidence banner should show per-section field breakdown."""
+        self._upload_pdf(
+            page, streamlit_app,
+            "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
+        )
+
+        content = page.content()
+        # Per-section breakdown should be visible
+        assert "Account:" in content, "Account section count should be displayed"
+        assert "Billing:" in content, "Billing section count should be displayed"
+        assert "Consumption:" in content, "Consumption section count should be displayed"
+        assert "Costs:" in content, "Costs section count should be displayed"
+        assert "Balance:" in content, "Balance section count should be displayed"
+
+    def test_warnings_appear_before_bill_data(self, page: Page, streamlit_app: str):
+        """Warnings should appear near the top, before Account Details section."""
+        self._upload_pdf(
+            page, streamlit_app,
+            "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
+        )
+
+        content = page.text_content("body") or ""
+        # If there are warnings, they should appear before Account Details
+        account_pos = content.find("Account Details")
+        if account_pos > 0:
+            # Warnings (if any) should be before Account Details, not after Export
+            export_pos = content.find("Export")
+            # The warning section should NOT be between Balance and Export
+            balance_pos = content.find("Balance")
+            if balance_pos > 0 and export_pos > 0:
+                warnings_after_balance = content[balance_pos:export_pos]
+                assert "Extraction Warning" not in warnings_after_balance, \
+                    "Warnings should not appear between Balance and Export sections"
 
     def test_bill_summary_has_sections(self, page: Page, streamlit_app: str):
         """Bill summary should have organized sections."""
@@ -201,3 +317,27 @@ class TestBillSummaryDisplay:
         # Should not show error alerts
         errors = page.locator('[data-testid="stAlert"][data-type="error"]')
         assert errors.count() == 0, "No errors should appear for valid bill PDFs"
+
+    def test_tariff_panel_hidden_during_bill_view(self, page: Page, streamlit_app: str):
+        """Tariff rates sidebar should be hidden when viewing a bill PDF."""
+        self._upload_pdf(
+            page, streamlit_app,
+            "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
+        )
+
+        content = page.content()
+        assert "Bill Extraction Mode" in content, \
+            "Sidebar should show 'Bill Extraction Mode' instead of tariff inputs"
+        assert "Tariff Rates" not in content, \
+            "Tariff Rates header should not appear during bill view"
+
+    def test_raw_text_expander_present(self, page: Page, streamlit_app: str):
+        """Raw text debug expander should be available on bill view."""
+        self._upload_pdf(
+            page, streamlit_app,
+            "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
+        )
+
+        content = page.content()
+        assert "Raw Extracted Text" in content, \
+            "Raw Extracted Text expander should be present"

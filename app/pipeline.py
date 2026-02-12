@@ -497,7 +497,11 @@ TIER2_UNIVERSAL_PATTERNS: dict[str, list[tuple[str, float, str | None]]] = {
     ],
     "billing_period": [
         (r"(?:Billing|Bill|Usage|Accounting)\s*[Pp]eriod\s*[:\s]*(\d{1,2}\s+\w+\s+\d{2,4}\s*(?:to|-)\s*\d{1,2}\s+\w+\s+\d{2,4})", 0.85, None),
-        (r"(?:Billing|Bill)\s*[Pp]eriod\s*[:\s]*(\d{2}/\d{2}/\d{4}\s*-\s*\d{2}/\d{2}/\d{4})", 0.85, None),
+        # Multiline: label then dates on next line
+        (r"(?:Billing|Bill|Accounting)\s*[Pp]eriod\s*\n\s*(\d{1,2}\s+\w+\s+\d{2,4}\s*(?:to|-)\s*\d{1,2}\s+\w+\s+\d{2,4})", 0.85, None),
+        (r"(?:Billing|Bill|Accounting)\s*[Pp]eriod\s*[:\s]*(\d{2}/\d{2}/\d{4})\s*[-–]\s*(\d{2}/\d{2}/\d{4})", 0.85, None),
+        # dd.mm.yyyy - dd.mm.yyyy
+        (r"(?:Billing|Bill|Accounting)\s*[Pp]eriod\s*[:\s]*(\d{2}\.\d{2}\.\d{4})\s*[-–]\s*(\d{2}\.\d{2}\.\d{4})", 0.85, None),
         # ESB multiline: "Billing period\n---\n29 Feb 24 to 30 Apr 24"
         (r"Billing\s*period\s*\n[^\n]*\n\s*(\d{1,2}\s+\w+\s+\d{2,4}\s+to\s+\d{1,2}\s+\w+\s+\d{2,4})", 0.80, None),
     ],
