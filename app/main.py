@@ -8,6 +8,7 @@ energy audit reports.
 
 import streamlit as st
 import pandas as pd
+import hashlib
 import io
 from pathlib import Path
 from datetime import datetime, timedelta, date
@@ -38,7 +39,8 @@ from parse_result import (
 )
 from column_mapping import detect_columns, build_column_mapping, validate_mapping
 from excel_parser import parse_excel_file, read_upload, get_sheet_names
-from bill_parser import extract_bill, BillData
+from bill_parser import extract_bill, BillData, generic_to_legacy
+from orchestrator import extract_bill_pipeline
 from dataclasses import asdict
 
 # Page config
@@ -1008,11 +1010,13 @@ def show_welcome():
 
 def _handle_bill_pdf(file_content: bytes, filename: str):
     """Handle PDF bill upload — extract and display summary."""
-    bill_key = f"bill_{filename}_{len(file_content)}"
+    content_hash = hashlib.md5(file_content).hexdigest()
+    bill_key = f"bill_{filename}_{len(file_content)}_{content_hash}"
     if st.session_state.get("_bill_cache_key") != bill_key:
         try:
             with st.spinner("Extracting bill data..."):
-                bill = extract_bill(file_content)
+                pipeline_result = extract_bill_pipeline(file_content)
+                bill = generic_to_legacy(pipeline_result.bill)
                 st.session_state._bill_cache_key = bill_key
                 st.session_state._bill_cached_result = bill
         except Exception as e:

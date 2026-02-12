@@ -2,7 +2,7 @@
 Pipeline Orchestrator
 ======================
 
-Wires together Tier 0 → Tier 1 → Tier 3 into a single entry point.
+Wires together Tier 0 → Tier 1 → Tier 2 / Tier 3 into a single entry point.
 Takes a PDF path or bytes, returns structured GenericBillData with
 confidence scoring and extraction metadata.
 
@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -33,6 +34,7 @@ from pipeline import (
     PROVIDER_BILL_TYPE,
 )
 from provider_configs import get_provider_config
+from spatial_extraction import extract_tier2_spatial
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +176,58 @@ def _build_bill(
     return bill
 
 
+def _is_low_quality_text(text: str) -> bool:
+    """Determine whether extracted text is too low-quality to rely on.
+
+    Scanned PDFs sometimes produce >50 characters of junk from embedded
+    metadata, font names, or partial OCR layers. A raw length check is
+    insufficient -- we need to assess *text quality* to decide whether
+    spatial OCR should run.
+
+    Heuristics (any True means low quality):
+      1. Very short text (< 50 chars stripped) -- obviously insufficient.
+      2. Low substantive word count -- fewer than 5 words of 3+ alpha chars.
+         Two-letter fragments are common OCR noise (Il, lI, iI, etc.) so
+         they are not counted as substantive.
+      3. Low alpha ratio -- less than 40% of non-whitespace characters are
+         alphabetic, suggesting binary/metadata noise.
+
+    Returns:
+        True if the text is low quality and spatial OCR should be attempted.
+    """
+    stripped = text.strip()
+
+    # Trivially short text is always low quality
+    if len(stripped) < 50:
+        return True
+
+    # Count substantive words: sequences of 3+ alphabetic characters.
+    # Two-letter combos (Il, lI, Tf, gs, etc.) are common in OCR noise
+    # and PDF operator fragments, so require at least 3 alpha chars.
+    substantive_words = re.findall(r"[a-zA-Z]{3,}", stripped)
+    if len(substantive_words) < 5:
+        log.debug(
+            "Low quality: only %d substantive words (3+ alpha chars) "
+            "in %d chars of text",
+            len(substantive_words), len(stripped),
+        )
+        return True
+
+    # Check ratio of alphabetic characters to total non-whitespace chars
+    non_ws = re.sub(r"\s", "", stripped)
+    if non_ws:
+        alpha_count = sum(1 for c in non_ws if c.isalpha())
+        alpha_ratio = alpha_count / len(non_ws)
+        if alpha_ratio < 0.40:
+            log.debug(
+                "Low quality: alpha ratio %.2f in %d non-whitespace chars",
+                alpha_ratio, len(non_ws),
+            )
+            return True
+
+    return False
+
+
 def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
     """Extract structured bill data from a PDF using the tiered pipeline.
 
@@ -181,7 +235,8 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
       1. Tier 0: Extract text + classify (native vs scanned)
       2. Tier 1: Detect provider from extracted text
       3. If known provider with config → Tier 3 extraction
-         If unknown provider → escalate (Tier 2/4 not yet implemented)
+         If unknown provider → Tier 2 universal regex fallback
+         If scanned PDF with little text → Tier 2 spatial OCR extraction
       4. Confidence scoring + cross-field validation
       5. Build GenericBillData from extracted fields
       6. Return PipelineResult
@@ -208,10 +263,87 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
 
     text = tier0.extracted_text
 
-    # If scanned PDF with very little text, note the limitation
-    if not tier0.is_native_text and len(text.strip()) < 50:
+    # If scanned PDF with low-quality text, attempt spatial OCR extraction.
+    # Use a quality heuristic rather than a raw length check because scanned
+    # PDFs can produce >50 chars of junk from embedded metadata or partial
+    # OCR layers while still lacking usable content.
+    if not tier0.is_native_text and _is_low_quality_text(text):
+        extraction_path.append("tier2_spatial")
+        try:
+            spatial_result, avg_ocr_conf, _ocr_df, ocr_text = extract_tier2_spatial(source)
+        except Exception as e:
+            log.warning(
+                "Spatial extraction failed for scanned PDF: %s", e, exc_info=True
+            )
+            spatial_result = None
+            avg_ocr_conf = None
+            ocr_text = None
+
+        if spatial_result is not None and spatial_result.field_count > 0:
+            extraction_fields = spatial_result.fields
+
+            # Detect provider from OCR text already obtained by extract_tier2_spatial
+            # (reuses OCR results to avoid a redundant expensive OCR pass)
+            try:
+                provider_result = detect_provider(ocr_text)
+                text = ocr_text  # Use OCR text for downstream
+            except Exception as e:
+                log.error(
+                    "OCR provider detection failed during spatial flow: %s",
+                    e,
+                    exc_info=True,
+                )
+                provider_result = ProviderDetectionResult(
+                    provider_name="unknown", is_known=False
+                )
+
+            extraction_path.append(
+                f"tier1_{'known' if provider_result.is_known else 'unknown'}"
+            )
+            provider_name = provider_result.provider_name
+
+            # Also try Tier 3 config extraction on OCR text if provider known
+            config = get_provider_config(provider_name) if provider_result.is_known else None
+            tier3 = None
+            if config is not None:
+                tier3 = extract_with_config(text, provider_name)
+                extraction_path.append(f"tier3_{provider_name.lower().replace(' ', '_')}")
+                # Merge: Tier 3 fills gaps spatial missed
+                for fname, fval in tier3.fields.items():
+                    if fname not in extraction_fields:
+                        extraction_fields[fname] = fval
+
+            bill_type = PROVIDER_BILL_TYPE.get(provider_name)
+            confidence = calculate_confidence(
+                extraction_fields,
+                provider=provider_name,
+                bill_type=bill_type,
+                avg_ocr_confidence=avg_ocr_conf,
+            )
+
+            build_result = Tier3ExtractionResult(
+                provider=provider_name,
+                fields=extraction_fields,
+                field_count=len(extraction_fields),
+                hit_rate=spatial_result.hit_rate,
+                warnings=spatial_result.warnings,
+            )
+
+            extraction_method = " → ".join(extraction_path)
+            bill = _build_bill(build_result, provider_name, confidence, extraction_method, text)
+
+            return PipelineResult(
+                bill=bill,
+                confidence=confidence,
+                tier0=tier0,
+                provider_detection=provider_result,
+                tier3=tier3,
+                tier2=spatial_result,
+                extraction_path=extraction_path,
+            )
+
+        # Spatial extraction failed or produced no results - fall through
         extraction_path.append("insufficient_text")
-        # Build a minimal result with escalation
         empty_provider = ProviderDetectionResult(
             provider_name="unknown", is_known=False
         )
@@ -221,7 +353,7 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
             extraction_method="tier0_insufficient_text",
             confidence_score=empty_confidence.score,
             raw_text=text,
-            warnings=["Insufficient text extracted - OCR or Tier 4 LLM required"],
+            warnings=["Insufficient text extracted - OCR and spatial extraction failed"],
         )
         return PipelineResult(
             bill=bill,

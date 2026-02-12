@@ -3,9 +3,14 @@
 Pipeline Accuracy Evaluation Script
 =====================================
 
-Runs the extraction pipeline against canonical fixture PDFs and compares
-results to ground-truth expected values. Produces per-file and aggregate
-accuracy metrics.
+Runs the **full end-to-end orchestrator pipeline** (``extract_bill_pipeline``)
+against canonical fixture PDFs and compares results to ground-truth expected
+values.  Produces per-file and aggregate accuracy metrics.
+
+The script exercises the real pipeline path -- including Tier-0 text
+extraction, scanned-PDF routing, Tier-1 provider detection, Tier-3
+config-driven extraction, Tier-2 universal fallback, spatial OCR, and
+field merging -- so the reported accuracy reflects true end-to-end quality.
 
 Usage:
     python3 evaluate_pipeline.py                    # Run evaluation
@@ -24,7 +29,7 @@ import sys
 # Ensure app/ is on the path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from pipeline import extract_text_tier0, extract_with_config, calculate_confidence
+from orchestrator import extract_bill_pipeline, PipelineResult
 
 
 GROUND_TRUTH_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "ground_truth.json")
@@ -58,13 +63,48 @@ def _values_match(expected: str, actual: str, tolerance: float = 0.02) -> bool:
     return e_norm == a_norm
 
 
+def _get_extraction_fields(pipeline_result: PipelineResult) -> dict:
+    """Collect the final extraction fields from a PipelineResult.
+
+    The orchestrator may populate tier3, tier2, or both (merged).  We
+    reconstruct the same merge logic the orchestrator used so evaluation
+    reflects the real pipeline output.
+
+    Merge rules (mirroring orchestrator.extract_bill_pipeline):
+      - When both tier2 (spatial) and tier3 are present (scanned-PDF path):
+        spatial fields take priority; tier3 only fills gaps.
+      - When only tier3 is present: use tier3 fields.
+      - When only tier2 is present: use tier2 fields.
+    """
+    fields: dict = {}
+
+    if pipeline_result.tier2 is not None and pipeline_result.tier3 is not None:
+        # Scanned-PDF merge: start with tier3, then let tier2/spatial overwrite.
+        # This matches the orchestrator which starts with spatial_result.fields
+        # and only adds tier3 fields where the key is absent.
+        fields.update(pipeline_result.tier3.fields)
+        fields.update(pipeline_result.tier2.fields)
+    elif pipeline_result.tier3 is not None:
+        fields.update(pipeline_result.tier3.fields)
+    elif pipeline_result.tier2 is not None:
+        fields.update(pipeline_result.tier2.fields)
+
+    # If neither tier produced fields the pipeline still ran but found
+    # nothing -- return the empty dict so every expected field shows as
+    # missing.
+    return fields
+
+
 def evaluate_fixture(fixture: dict) -> dict:
     """Evaluate a single fixture against ground truth.
+
+    Runs the **full orchestrator pipeline** (``extract_bill_pipeline``)
+    end-to-end, then compares extracted fields to expected values.
 
     Returns dict with per-field results and scores.
     """
     filename = fixture["filename"]
-    provider = fixture["provider"]
+    expected_provider = fixture["provider"]
     expected = fixture["expected"]
     not_applicable = set(fixture.get("not_applicable", []))
 
@@ -72,15 +112,19 @@ def evaluate_fixture(fixture: dict) -> dict:
     if not os.path.exists(pdf_path):
         return {
             "filename": filename,
-            "provider": provider,
+            "provider": expected_provider,
             "status": "skipped",
             "reason": f"PDF not found: {pdf_path}",
         }
 
-    # Run pipeline
-    tier0 = extract_text_tier0(pdf_path)
-    tier3 = extract_with_config(tier0.extracted_text, provider)
-    confidence = calculate_confidence(tier3.fields, provider=provider)
+    # Run the FULL orchestrator pipeline end-to-end
+    pipeline_result = extract_bill_pipeline(pdf_path)
+
+    # Collect the fields that the pipeline actually produced
+    extraction_fields = _get_extraction_fields(pipeline_result)
+
+    # Detected provider (from the pipeline's own Tier-1 detection)
+    detected_provider = pipeline_result.provider_detection.provider_name
 
     # Compare fields
     gt = load_ground_truth()
@@ -100,7 +144,7 @@ def evaluate_fixture(fixture: dict) -> dict:
         weight = critical_weight if is_critical else non_critical_weight
         total_weight += weight
 
-        actual_fr = tier3.fields.get(field_name)
+        actual_fr = extraction_fields.get(field_name)
         if actual_fr is None:
             field_results[field_name] = {
                 "expected": expected_value,
@@ -123,14 +167,17 @@ def evaluate_fixture(fixture: dict) -> dict:
 
     return {
         "filename": filename,
-        "provider": provider,
+        "provider": expected_provider,
+        "detected_provider": detected_provider,
+        "provider_match": detected_provider == expected_provider,
         "status": "evaluated",
         "accuracy": accuracy,
         "fields_expected": len(expected),
         "fields_matched": sum(1 for f in field_results.values() if f["match"]),
         "fields_missing": sum(1 for f in field_results.values() if f["actual"] is None),
-        "confidence_score": confidence.score,
-        "confidence_band": confidence.band,
+        "confidence_score": pipeline_result.confidence.score,
+        "confidence_band": pipeline_result.confidence.band,
+        "extraction_path": " -> ".join(pipeline_result.extraction_path),
         "field_results": field_results,
     }
 
@@ -173,15 +220,25 @@ def evaluate_all() -> dict:
 def print_report(evaluation: dict) -> None:
     """Print a human-readable evaluation report."""
     print("=" * 70)
-    print("  Pipeline Accuracy Evaluation Report")
+    print("  Pipeline End-to-End Accuracy Evaluation Report")
     print("=" * 70)
 
     for result in evaluation["results"]:
         if result["status"] == "skipped":
-            print(f"\n  SKIP: {result['filename']} — {result['reason']}")
+            print(f"\n  SKIP: {result['filename']} -- {result['reason']}")
             continue
 
-        print(f"\n  {result['provider']} — {result['filename']}")
+        print(f"\n  {result['provider']} -- {result['filename']}")
+
+        # Show extraction path to reveal which tiers actually ran
+        print(f"  Extraction path: {result.get('extraction_path', 'n/a')}")
+
+        # Show provider detection result
+        detected = result.get("detected_provider", "?")
+        prov_ok = result.get("provider_match", False)
+        prov_tag = "OK" if prov_ok else "MISMATCH"
+        print(f"  Provider detection: {detected} [{prov_tag}]")
+
         print(f"  Accuracy: {result['accuracy']:.0%}")
         print(f"  Confidence: {result['confidence_score']:.2f} ({result['confidence_band']})")
         print(f"  Fields: {result['fields_matched']}/{result['fields_expected']} matched, "
@@ -190,7 +247,7 @@ def print_report(evaluation: dict) -> None:
         for field_name, fr in sorted(result["field_results"].items()):
             status = "MATCH" if fr["match"] else ("MISS" if fr["actual"] is None else "WRONG")
             crit = " [CRITICAL]" if fr["critical"] else ""
-            actual = fr["actual"] or "—"
+            actual = fr["actual"] or "--"
             expected = fr["expected"]
             if status == "MATCH":
                 print(f"    [{status}] {field_name}: {actual}{crit}")

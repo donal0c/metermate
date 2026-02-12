@@ -369,7 +369,51 @@ def extract_with_config(text: str, provider_name: str) -> Tier3ExtractionResult:
                 # For multi-match fields (e.g. ESB standing charge periods)
                 all_matches = re.findall(value_re, search_text, re.IGNORECASE)
                 if all_matches:
-                    # Store the raw matches as semicolon-joined for the caller
+                    capture_groups = field_cfg.get("capture_groups", {})
+
+                    # If capture_groups defines "days" and "rate",
+                    # aggregate the multiple periods into a single
+                    # "days - rate - total" string that the orchestrator
+                    # can parse like a single-match standing charge.
+                    # When "total" is also in capture_groups, sum the
+                    # explicit totals; otherwise compute from days*rate.
+                    if "days" in capture_groups and "rate" in capture_groups:
+                        days_idx = capture_groups["days"] - 1
+                        rate_idx = capture_groups["rate"] - 1
+                        total_idx = (capture_groups["total"] - 1
+                                     if "total" in capture_groups else None)
+                        total_days = 0.0
+                        total_charge = 0.0
+                        valid = True
+                        for m in all_matches:
+                            parts = m if isinstance(m, tuple) else (m,)
+                            try:
+                                d = float(parts[days_idx])
+                                r = float(parts[rate_idx])
+                                total_days += d
+                                if total_idx is not None:
+                                    total_charge += float(parts[total_idx])
+                                else:
+                                    total_charge += d * r
+                            except (ValueError, IndexError):
+                                valid = False
+                                break
+                        if valid and total_days > 0:
+                            avg_rate = total_charge / total_days
+                            value = (
+                                f"{int(total_days)} - "
+                                f"{avg_rate:.4f} - "
+                                f"{total_charge:.2f}"
+                            )
+                            extracted[field_name] = FieldExtractionResult(
+                                field_name=field_name,
+                                value=value,
+                                confidence=confidence,
+                                pattern_index=pat_idx,
+                            )
+                            break
+
+                    # Default multi_match: semicolon-joined raw values
                     joined = "; ".join(
                         _apply_transform(
                             " ".join(m) if isinstance(m, tuple) else m,
@@ -729,6 +773,64 @@ def validate_cross_fields(
     return checks
 
 
+def _infer_bill_type_from_fields(fields: dict[str, FieldExtractionResult]) -> str | None:
+    """Infer bill type from extracted field names when provider is unknown.
+
+    Uses type-specific 'signature' fields to determine the most likely bill type.
+    Returns None if no clear signal is found (caller should use best-match logic).
+    """
+    field_names = set(fields.keys())
+
+    # Signature fields unique to each bill type
+    electricity_signals = {"mprn", "day_kwh", "day_rate", "night_kwh", "night_rate"}
+    gas_signals = {"gprn"}
+    fuel_signals = {"litres", "unit_price", "invoice_number"}
+
+    elec_hits = len(field_names & electricity_signals)
+    gas_hits = len(field_names & gas_signals)
+    fuel_hits = len(field_names & fuel_signals)
+
+    # Require at least one signal hit; pick the type with the most hits
+    best_hits = max(elec_hits, gas_hits, fuel_hits)
+    if best_hits == 0:
+        return None
+
+    # Resolve ties by returning None (will fall through to best-match)
+    candidates = []
+    if elec_hits == best_hits:
+        candidates.append("electricity")
+    if gas_hits == best_hits:
+        candidates.append("gas")
+    if fuel_hits == best_hits:
+        candidates.append("fuel")
+
+    if len(candidates) == 1:
+        return candidates[0]
+    return None  # Ambiguous -- use best-match logic
+
+
+def _best_match_bill_type(fields: dict[str, FieldExtractionResult]) -> str:
+    """Pick the bill type profile with the highest field coverage.
+
+    Used as a last resort when neither the provider nor field signatures
+    give a clear answer.  This avoids defaulting to electricity and biasing
+    confidence for unknown gas/fuel bills.
+    """
+    field_names = set(fields.keys())
+    best_type = "electricity"
+    best_coverage = -1.0
+
+    for btype, expected in FIELD_PROFILES.items():
+        if not expected:
+            continue
+        coverage = len(field_names & expected) / len(expected)
+        if coverage > best_coverage:
+            best_coverage = coverage
+            best_type = btype
+
+    return best_type
+
+
 def calculate_confidence(
     fields: dict[str, FieldExtractionResult],
     provider: str | None = None,
@@ -751,15 +853,19 @@ def calculate_confidence(
         fields: Extracted field results from Tier 3.
         provider: Provider name (used to determine bill type).
         bill_type: Explicit bill type ("electricity", "gas", "fuel").
-            If not given, inferred from provider.
+            If not given, inferred from provider or from extracted fields.
         avg_ocr_confidence: Average OCR word confidence (0-100 scale).
             If None, OCR component gets 0.5 (neutral).
     """
     # Determine expected fields
     if bill_type is None and provider is not None:
-        bill_type = PROVIDER_BILL_TYPE.get(provider, "electricity")
+        bill_type = PROVIDER_BILL_TYPE.get(provider)
     if bill_type is None:
-        bill_type = "electricity"
+        # Provider unknown or not in PROVIDER_BILL_TYPE -- infer from fields
+        bill_type = _infer_bill_type_from_fields(fields)
+    if bill_type is None:
+        # Still unknown -- pick profile with best field overlap
+        bill_type = _best_match_bill_type(fields)
 
     expected = FIELD_PROFILES.get(bill_type, FIELD_PROFILES["electricity"])
     fields_found = len(set(fields.keys()) & expected)

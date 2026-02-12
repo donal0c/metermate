@@ -280,12 +280,13 @@ ESB_NETWORKS_CONFIG = {
         },
         "standing_charge": {
             "patterns": [
-                # ESB: multiple periods, summed by extractor
-                (None, r"Standing\s+Charge\s+(\d+)\s+days?\s+@\s+[€\u20ac](\d+\.\d+)\s*/\s*day"),
+                # ESB: multiple periods with total on separate line
+                # Format: "Standing Charge\n{total}\n{days} days @ €{rate} / day"
+                (None, r"Standing\s+Charge\s+([\d.]+)\s+(\d+)\s+days?\s+@\s+[€\u20ac](\d+\.\d+)\s*/\s*day"),
             ],
             "confidence": 0.85,
             "multi_match": True,
-            "capture_groups": {"days": 1, "rate": 2},
+            "capture_groups": {"total": 1, "days": 2, "rate": 3},
         },
         "pso_levy": {
             "patterns": [
