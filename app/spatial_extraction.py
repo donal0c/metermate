@@ -215,6 +215,45 @@ class ValueMatch:
 # OCR data extraction
 # ---------------------------------------------------------------------------
 
+_BILL_KEYWORDS = [
+    "standing charge", "vat", "total", "energy", "electricity",
+    "account", "meter", "mprn", "kwh", "pso", "levy", "billing",
+    "invoice", "payment", "charge", "tariff",
+]
+
+
+def _pick_best_rotation(img, pytesseract) -> "Image.Image":
+    """Probe 0° and 90° CCW rotations; return the one with better OCR structure.
+
+    Phone photos may be physically rotated (EXIF tag stripped by tools like
+    Picasa).  A quick ``image_to_string`` probe at two orientations lets us
+    detect the correct one by counting bill-keyword hits and text lines.
+    Only the 0° and 90° candidates are tested because real-world phone photos
+    are either landscape-left or portrait.
+    """
+    from PIL import Image  # noqa: F811
+
+    candidates = [(0, img)]
+    rotated_90 = img.rotate(90, expand=True)
+    candidates.append((90, rotated_90))
+
+    best_img = img
+    best_score = -1
+
+    for angle, candidate in candidates:
+        text = pytesseract.image_to_string(candidate, lang="eng").lower()
+        kw_hits = sum(1 for kw in _BILL_KEYWORDS if kw in text)
+        line_count = len([ln for ln in text.strip().split("\n") if ln.strip()])
+        # Score: keyword hits weighted heavily, line count as tiebreaker
+        score = kw_hits * 100 + line_count
+        log.debug("Rotation probe %d°: kw_hits=%d lines=%d score=%d", angle, kw_hits, line_count, score)
+        if score > best_score:
+            best_score = score
+            best_img = candidate
+
+    return best_img
+
+
 def get_ocr_dataframe(
     source: bytes | str,
     is_image: bool = False,
@@ -242,6 +281,12 @@ def get_ocr_dataframe(
             img = Image.open(io.BytesIO(source))
         # Auto-rotate based on EXIF orientation tag (handles phone photos)
         img = ImageOps.exif_transpose(img)
+        # Probe rotations: phone photos may be physically rotated even after
+        # EXIF transpose (e.g. Picasa strips the EXIF tag).  Run a quick
+        # image_to_string at 0° and 90° CCW, pick the orientation that
+        # produces the most structured OCR output (more lines = proper
+        # reading order).
+        img = _pick_best_rotation(img, pytesseract)
         images = [img]
     else:
         from pdf2image import convert_from_bytes, convert_from_path

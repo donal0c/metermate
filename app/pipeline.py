@@ -615,7 +615,9 @@ TIER2_UNIVERSAL_PATTERNS: dict[str, list[tuple[str, float, str | None]]] = {
         (r"Sub\s*[Tt]otal\s*(?:before\s*VAT)?\s*[:\s]*[€\u20ac]?\s*([\d,]+\.\d{2})", 0.85, "strip_commas"),
         (r"Net\s+(?:Total|Amount)\s*[:\s]*[€\u20ac]?\s*([\d,]+\.\d{2})", 0.80, "strip_commas"),
         (r"(?:Total|Amount)\s+(?:Ex|Before)\s*VAT\s*[:\s]*[€\u20ac]?\s*([\d,]+\.\d{2})", 0.80, "strip_commas"),
-        (r"Total\s+electricity\s+charges\s+([\d,.]+)", 0.75, "strip_commas"),
+        # Infer from VAT line: "VAT 9% on €1483.66" → subtotal is the VAT base
+        (r"VAT\s+\d+%\s+on\s+[€\u20ac]([\d,]+\.\d{2})", 0.75, "strip_commas"),
+        (r"Total\s+electricity\s+charges\s+(\d[\d,]*\.\d{2})", 0.70, "strip_commas"),
     ],
     "vat_rate": [
         (r"(?:VAT|V\.A\.T\.?)\s*(?:@|at)?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%", 0.85, None),
@@ -623,9 +625,13 @@ TIER2_UNIVERSAL_PATTERNS: dict[str, list[tuple[str, float, str | None]]] = {
         (r"VAT\s+\d+\.\d+\s+(\d+)%", 0.80, None),
     ],
     "vat_amount": [
+        # "VAT 9% on €1483.66  133.53" — capture the amount AFTER the base
+        (r"(?:VAT|V\.A\.T\.?)\s*\d{1,2}(?:\.\d{1,2})?\s*%\s+on\s+[€\u20ac]?[\d,]+\.\d{2}\s+([\d,]+\.\d{2})", 0.90, "strip_commas"),
         (r"(?:VAT|V\.A\.T\.?)\s*(?:@|at)?\s*\d{1,2}(?:\.\d{1,2})?\s*%\s*[^\d]*?[€\u20ac]?\s*([\d,]+\.\d{2})", 0.85, "strip_commas"),
         # ESB multiline: "VAT\n780.83\n9%"
         (r"VAT\s+(\d+\.\d{2})\s+\d+%", 0.80, "strip_commas"),
+        # Line-end: "VAT 9% on €1483.66  433.54" — capture last amount on line
+        (r"VAT\s+\d+%\s+on\s+[€\u20ac]?[\d,]+\.\d{2}\s+(\d[\d,]*\.\d{2})\s*$", 0.80, "strip_commas"),
     ],
     "total_incl_vat": [
         (r"Total\s+(?:Charges?\s+)?(?:[Ff]or\s+)?(?:[Tt]h(?:is|e)\s+[Pp]eriod)\s*[:\s]*[€\u20ac]?\s*([\d,]+\.\d{2})", 0.85, "strip_commas"),
@@ -638,10 +644,14 @@ TIER2_UNIVERSAL_PATTERNS: dict[str, list[tuple[str, float, str | None]]] = {
     "day_kwh": [
         (r"Day\s+(?:Energy|Rate)\s+(\d[\d,]*)\s*(?:kWh|xWh)", 0.80, "strip_commas"),
         (r"Energy\s+(\d[\d,]*)\s*kWh\s+\d+\.\d+", 0.70, "strip_commas"),
+        # Single-tariff General: "3485  0.3626  General  1263.66"
+        (r"\b(\d{3,5})\s+\d+\.\d{3,4}\s+General", 0.70, "strip_commas"),
     ],
     "day_rate": [
         (r"Day\s+(?:Energy|Rate)\s+\d[\d,]*\s*(?:kWh|xWh)\s*@\s*[€\u20ac]?\s*(\d+\.\d+)", 0.80, None),
         (r"Energy\s+\d[\d,]*\s*kWh\s+(\d+\.\d+)\s*[€\u20ac]", 0.70, None),
+        # Single-tariff General: "3485  0.3626  General  1263.66"
+        (r"\b\d{3,5}\s+(\d+\.\d{3,4})\s+General", 0.70, None),
     ],
     "night_kwh": [
         (r"Night\s+(?:Energy|Rate)\s+(\d[\d,]*)\s*(?:kWh|xWh)", 0.80, "strip_commas"),
@@ -652,10 +662,14 @@ TIER2_UNIVERSAL_PATTERNS: dict[str, list[tuple[str, float, str | None]]] = {
     "standing_charge": [
         # Limit scan distance to prevent grabbing unrelated amounts
         (r"Standing\s*Charge\s*.{0,80}?[€\u20ac]\s*(\d+[\d,.]*\.\d{2})", 0.75, "strip_commas"),
+        # Fallback: line-end amount without Euro sign (OCR may drop €)
+        (r"Standing\s*Charge\b[^\n]*?(\d+\.\d{2})\s*$", 0.70, "strip_commas"),
     ],
     "pso_levy": [
-        (r"PSO\s+Levy.*?[€\u20ac]?\s*(\d+[\d,.]*\.\d{2})", 0.75, None),
-        (r"Public\s*Service\s*Obligation\s*Levy.*?[€\u20ac](\d+\.\d+)", 0.70, None),
+        # Line-end anchor: capture the total at end of line, not the per-unit rate
+        (r"PSO\s+Levy\b[^\n]*?(\d[\d,]*\.\d{2})\s*$", 0.75, "strip_commas"),
+        (r"PSO\s+Levy.*?[€\u20ac]?\s*(\d+[\d,.]*\.\d{2})", 0.70, None),
+        (r"Public\s*Service\s*Obligation\s*Levy.*?[€\u20ac](\d+\.\d+)", 0.65, None),
     ],
     "litres": [
         (r"(?:KEROSENE|[Hh]eating\s*[Oo]il|[Gg]as\s*[Oo]il)\s+(\d{2,5})\s+\d+\.\d{2}", 0.75, None),
