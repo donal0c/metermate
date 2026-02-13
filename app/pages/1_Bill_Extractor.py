@@ -1185,19 +1185,6 @@ uploaded_files = st.file_uploader(
     label_visibility="collapsed",
 )
 
-# Handle demo file from home page
-_demo_content = st.session_state.pop("_demo_file_content", None)
-_demo_name = st.session_state.pop("_demo_file_name", None)
-
-if _demo_content is not None and _demo_name is not None:
-    demo_hash = content_hash(_demo_content)
-    if demo_hash not in st.session_state.processed_hashes:
-        with st.spinner(f"Extracting {_demo_name}..."):
-            result = _extract_bill(_demo_content, _demo_name)
-        st.session_state.extracted_bills.append(result)
-        st.session_state.processed_hashes.add(demo_hash)
-        st.rerun()
-
 # Process new uploads (deduplicate by content hash)
 if uploaded_files:
     new_files = []

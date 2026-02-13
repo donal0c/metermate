@@ -8,7 +8,6 @@ Validates that:
   - Multi-file upload shows comparison view with tabs
   - Individual bill details are expandable below comparison
   - Clear All button resets the page
-  - Demo bill button from home page still works
   - Status chips appear for processed bills
 
 Requires: playwright, pytest-playwright
@@ -321,30 +320,6 @@ class TestClearAllButton:
         content = page.content()
         assert "Clear All Bills" not in content, \
             "Clear All button should not be visible when empty"
-
-
-class TestDemoBillButton:
-    """Test that the demo bill button from home page still works."""
-
-    def test_demo_bill_navigates_and_extracts(self, page: Page, streamlit_app: str):
-        """Clicking demo bill on home page should navigate to extractor with results."""
-        page.goto(streamlit_app)
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(3000)
-
-        bill_button = page.get_by_text("Sample bill")
-        if bill_button.count() > 0:
-            bill_button.click()
-            page.wait_for_timeout(10000)
-
-            content = page.content()
-            has_extraction = any(
-                term in content.lower()
-                for term in ["confidence", "mprn", "account"]
-            )
-            assert has_extraction, "Demo bill should load and show extraction results"
-        else:
-            pytest.skip("Demo bill button not available (sample file missing)")
 
 
 class TestComparisonTabs:

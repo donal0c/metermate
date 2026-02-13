@@ -1,10 +1,9 @@
 """Energy Insight - Task-Oriented Landing Page
 
 Home page for the Streamlit multipage app. Provides two clear workflow
-cards (Bill Extractor, Meter Analysis) and subtle sample-data links.
+cards (Bill Extractor, Meter Analysis).
 """
 
-import os
 import streamlit as st
 from pathlib import Path
 
@@ -85,39 +84,3 @@ with hero_col:
     </div>
     """
     st.markdown(_CARD_HTML, unsafe_allow_html=True)
-
-    # --- Sample Data (subtle text links) ---
-    _sample_dir = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
-    _hdf_path = os.path.join(os.path.dirname(__file__), "..",
-                             "HDF_calckWh_10306268587_03-02-2026.csv")
-
-    st.markdown(
-        '<div style="color: #64748b; font-size: 0.85rem; margin-top: 0.5rem;">'
-        'Or try with sample data:</div>',
-        unsafe_allow_html=True,
-    )
-
-    sample_col1, sample_col2, _ = st.columns([1, 1, 2])
-
-    with sample_col1:
-        if os.path.exists(_hdf_path):
-            if st.button("Sample HDF data", key="demo_hdf", type="secondary"):
-                with open(_hdf_path, "rb") as f:
-                    st.session_state._demo_file_content = f.read()
-                st.session_state._demo_file_name = "HDF_sample.csv"
-                st.switch_page("pages/2_Meter_Analysis.py")
-        else:
-            st.button("Sample HDF data", key="demo_hdf",
-                      type="secondary", disabled=True)
-
-    with sample_col2:
-        _sample_bill = os.path.join(_sample_dir, "1845.pdf")
-        if os.path.exists(_sample_bill):
-            if st.button("Sample bill", key="demo_bill", type="secondary"):
-                with open(_sample_bill, "rb") as f:
-                    st.session_state._demo_file_content = f.read()
-                st.session_state._demo_file_name = "sample_bill.pdf"
-                st.switch_page("pages/1_Bill_Extractor.py")
-        else:
-            st.button("Sample bill", key="demo_bill",
-                      type="secondary", disabled=True)

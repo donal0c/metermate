@@ -95,58 +95,6 @@ class TestAppStartup:
         uploader = page.locator('[data-testid="stFileUploader"]')
         expect(uploader).to_be_visible(timeout=30000)
 
-    def test_demo_buttons_on_welcome_page(self, page: Page, streamlit_app: str):
-        """Welcome page should show demo buttons for sample data."""
-        page.goto(streamlit_app)
-        page.wait_for_load_state("networkidle")
-
-        content = page.content()
-        assert "Try sample HDF data" in content or "Sample HDF" in content, \
-            "Sample HDF button should be visible on welcome page"
-        assert "Try sample bill" in content or "Sample bill" in content, \
-            "Sample bill button should be visible on welcome page"
-
-    def test_demo_bill_button_loads_data(self, page: Page, streamlit_app: str):
-        """Clicking the sample bill button should load bill extraction view."""
-        page.goto(streamlit_app)
-        page.wait_for_load_state("networkidle")
-
-        # Click the demo bill button
-        bill_button = page.get_by_text("Sample bill")
-        if bill_button.count() > 0:
-            bill_button.click()
-            page.wait_for_timeout(5000)
-
-            content = page.content()
-            # Should show extraction results (not the welcome page)
-            has_extraction = any(
-                term in content.lower()
-                for term in ["confidence", "mprn", "account"]
-            )
-            assert has_extraction, "Demo bill should load and show extraction results"
-
-    def test_demo_hdf_loads_heatmap_insights(self, page: Page, streamlit_app: str):
-        """Loading demo HDF data should show heatmap with auto-generated insights."""
-        page.goto(streamlit_app)
-        page.wait_for_load_state("networkidle")
-
-        # Click the demo HDF button
-        hdf_button = page.get_by_text("Sample HDF data")
-        if hdf_button.count() > 0:
-            hdf_button.click()
-            page.wait_for_timeout(5000)
-
-            # Navigate to the Heatmap tab
-            heatmap_tab = page.get_by_text("Heatmap")
-            if heatmap_tab.count() > 0:
-                heatmap_tab.first.click()
-                page.wait_for_timeout(2000)
-
-                content = page.content()
-                assert "Peak usage" in content, \
-                    "Heatmap should show auto-generated peak usage insight"
-
-
 class TestBillPDFUpload:
     """Test PDF bill upload and extraction display."""
 

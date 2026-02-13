@@ -345,20 +345,7 @@ _THEME_CSS = """
         color: #cbd5e1 !important;
     }
 
-    /* Sample data link-style buttons */
-    [data-testid="stBaseButton-secondary"] {
-        background: transparent !important;
-        color: #94a3b8 !important;
-        border: none !important;
-        font-weight: 400 !important;
-        padding: 0.25rem 0.5rem !important;
-    }
 
-    [data-testid="stBaseButton-secondary"]:hover {
-        color: #4ade80 !important;
-        background: transparent !important;
-        text-decoration: underline !important;
-    }
 </style>
 """
 

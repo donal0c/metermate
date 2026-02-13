@@ -1893,11 +1893,6 @@ filename = None
 if uploaded_file is not None:
     file_content = uploaded_file.getvalue()
     filename = uploaded_file.name
-    st.session_state.pop("_demo_file_content", None)
-    st.session_state.pop("_demo_file_name", None)
-elif st.session_state.get("_demo_file_content") is not None:
-    file_content = st.session_state._demo_file_content
-    filename = st.session_state._demo_file_name
 
 if file_content is not None and filename is not None:
     # Detect file type and route accordingly

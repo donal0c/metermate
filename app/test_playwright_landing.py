@@ -5,7 +5,6 @@ Validates that:
   - Landing page loads with two clear, obviously-clickable workflow cards
   - Clicking the Bill Extractor card navigates to the correct page
   - Clicking the Meter Analysis card navigates to the correct page
-  - Sample data buttons are present and styled subtly
   - No developer-facing text or old feature grid on the page
   - Cards have hover effects (border color, shadow, scale)
   - Hero section shows correct branding
@@ -197,33 +196,3 @@ class TestRemovedContent:
         expect(page.locator("text=Welcome to Energy Insight")).not_to_be_visible()
 
 
-class TestSampleData:
-    """Tests for the subtle sample data links."""
-
-    def test_sample_data_prompt_visible(self, page: Page, streamlit_app: str):
-        """'Or try with sample data:' text is visible."""
-        _go_home(page, streamlit_app)
-        expect(page.locator("text=Or try with sample data")).to_be_visible()
-
-    def test_sample_hdf_button_present(self, page: Page, streamlit_app: str):
-        """Sample HDF data button is present."""
-        _go_home(page, streamlit_app)
-        btn = page.locator("button", has_text="Sample HDF data")
-        expect(btn).to_be_visible()
-
-    def test_sample_bill_button_present(self, page: Page, streamlit_app: str):
-        """Sample bill button is present."""
-        _go_home(page, streamlit_app)
-        btn = page.locator("button", has_text="Sample bill")
-        expect(btn).to_be_visible()
-
-    def test_sample_buttons_are_secondary_style(self, page: Page, streamlit_app: str):
-        """Sample data buttons use secondary (subtle) styling, not green gradient."""
-        _go_home(page, streamlit_app)
-        btn = page.locator("[data-testid='stBaseButton-secondary']").first
-        if btn.count() > 0:
-            bg = btn.evaluate("el => getComputedStyle(el).background")
-            # Should NOT contain the green gradient
-            assert "linear-gradient" not in bg.lower() or "4ade80" not in bg, (
-                f"Sample buttons should not have green gradient. Got: {bg}"
-            )
