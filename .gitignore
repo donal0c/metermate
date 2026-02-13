@@ -24,9 +24,16 @@ research_output/
 # Beads issue tracker
 .beads/
 
-# Scratch test/screenshot scripts
+# Debug / scratch scripts
+debug_*.py
+debug_*.html
+debug_*.png
 test_phase3_screenshots.py
 test_*.mjs
+manual_edge_test.py
+run_edge_case_tests.py
+run_edge_tests.py
+verify_performance_tests.sh
 
 # Bills / sample data
 Steve_bills/
@@ -42,9 +49,38 @@ package-lock.json
 # Tesseract trained data
 *.traineddata
 
-# Docs (internal)
+# Docs (internal / session summaries)
 docs/
 AGENTS.md
+COMPREHENSIVE_E2E_TESTING_PROMPT.md
+DELIVERABLES.md
+DELIVERY_CHECKLIST.md
+E2E_TESTS_INDEX.md
+E2E_TEST_VERIFICATION.txt
+HDF_EDGE_CASE_TESTING_COMPLETE.md
+IMPLEMENTATION_SUMMARY.md
+PERFORMANCE_TESTS_DELIVERY.md
+PERFORMANCE_TESTS_INDEX.md
+PERFORMANCE_TEST_QUICKSTART.md
+PERFORMANCE_TEST_SUMMARY.md
+QUICKSTART_E2E_TESTS.md
+SCANNED_BILL_TESTING_GUIDE.md
+SCANNED_BILL_TESTS_QUICKREF.md
+SECURITY_TESTING_COMPLETE.md
+SECURITY_TESTS_QUICKSTART.md
+SECURITY_TESTS_VALIDATION.txt
+SECURITY_TEST_REPORT.md
+SESSION_SUMMARY.md
+TEST_CODE_REFERENCE.md
+TEST_E2E_BILL_COMPARISON_README.md
+TEST_STRUCTURE.txt
+TEST_SUITE_SUMMARY.md
+
+# Scratch test scripts (not part of test suite)
+app/debug_*
+app/test_debug_*
+app/test_extract_low_conf.py
+app/test_one_fixed.py
 
 # Misc artifacts
 =3.0.0
@@ -58,6 +94,10 @@ AGENTS.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment / secrets
+.env
+*.env
 
 # Streamlit
 .streamlit/secrets.toml

@@ -40,9 +40,10 @@ def _has_gemini_key() -> bool:
     return bool(os.environ.get("GEMINI_API_KEY"))
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def streamlit_app():
     """Start the Streamlit app with GEMINI_API_KEY set."""
+    import sys
     env = os.environ.copy()
     # Ensure Gemini API key is available to the app
     if not env.get("GEMINI_API_KEY"):
@@ -50,7 +51,7 @@ def streamlit_app():
 
     proc = subprocess.Popen(
         [
-            "python3", "-m", "streamlit", "run", APP_PATH,
+            sys.executable, "-m", "streamlit", "run", APP_PATH,
             "--server.port", str(STREAMLIT_PORT),
             "--server.headless", "true",
             "--browser.gatherUsageStats", "false",

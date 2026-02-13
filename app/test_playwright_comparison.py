@@ -38,9 +38,10 @@ STREAMLIT_PORT = 8598  # Different port from other E2E tests
 @pytest.fixture(scope="module")
 def streamlit_app():
     """Start the Streamlit app as a subprocess and yield the URL."""
+    import sys
     proc = subprocess.Popen(
         [
-            "python3", "-m", "streamlit", "run", APP_PATH,
+            sys.executable, "-m", "streamlit", "run", APP_PATH,
             "--server.port", str(STREAMLIT_PORT),
             "--server.headless", "true",
             "--browser.gatherUsageStats", "false",

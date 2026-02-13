@@ -215,11 +215,16 @@ class ValueMatch:
 # OCR data extraction
 # ---------------------------------------------------------------------------
 
-def get_ocr_dataframe(source: bytes | str) -> tuple[pd.DataFrame, float]:
-    """Convert PDF to images, run OCR, return DataFrame with bounding boxes.
+def get_ocr_dataframe(
+    source: bytes | str,
+    is_image: bool = False,
+) -> tuple[pd.DataFrame, float]:
+    """Convert PDF/image to images, run OCR, return DataFrame with bounding boxes.
 
     Args:
-        source: PDF file path (str) or raw PDF bytes.
+        source: PDF file path (str), raw PDF bytes, or image path/bytes
+                when ``is_image=True``.
+        is_image: If True, treat *source* as a JPG/PNG image instead of PDF.
 
     Returns:
         Tuple of (DataFrame with OCR word data, average confidence).
@@ -227,12 +232,20 @@ def get_ocr_dataframe(source: bytes | str) -> tuple[pd.DataFrame, float]:
                           block_num, line_num, word_num, page_num
     """
     import pytesseract
-    from pdf2image import convert_from_bytes, convert_from_path
 
-    if isinstance(source, str):
-        images = convert_from_path(source, dpi=300)
+    if is_image:
+        from PIL import Image
+        if isinstance(source, str):
+            images = [Image.open(source)]
+        else:
+            import io
+            images = [Image.open(io.BytesIO(source))]
     else:
-        images = convert_from_bytes(source, dpi=300)
+        from pdf2image import convert_from_bytes, convert_from_path
+        if isinstance(source, str):
+            images = convert_from_path(source, dpi=300)
+        else:
+            images = convert_from_bytes(source, dpi=300)
 
     all_rows: list[pd.DataFrame] = []
 
@@ -660,11 +673,14 @@ def preprocess_ocr_text(text: str, provider: str | None = None) -> str:
 
 def extract_tier2_spatial(
     source: bytes | str,
+    is_image: bool = False,
 ) -> tuple[Tier2ExtractionResult, float, pd.DataFrame, str]:
-    """Main entry point for spatial extraction from scanned PDFs.
+    """Main entry point for spatial extraction from scanned PDFs or images.
 
     Args:
-        source: PDF file path (str) or raw PDF bytes.
+        source: PDF file path (str), raw PDF bytes, or image path/bytes
+                when ``is_image=True``.
+        is_image: If True, treat *source* as a JPG/PNG image instead of PDF.
 
     Returns:
         Tuple of (Tier2ExtractionResult, avg_ocr_confidence, ocr_dataframe, ocr_text).
@@ -672,7 +688,7 @@ def extract_tier2_spatial(
         the OCR results without re-running the expensive OCR step.
     """
     # Step 1: OCR -> DataFrame
-    ocr_df, avg_conf = get_ocr_dataframe(source)
+    ocr_df, avg_conf = get_ocr_dataframe(source, is_image=is_image)
 
     if ocr_df.empty:
         return Tier2ExtractionResult(

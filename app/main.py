@@ -41,7 +41,7 @@ from parse_result import (
 from column_mapping import detect_columns, build_column_mapping, validate_mapping
 from excel_parser import parse_excel_file, read_upload, get_sheet_names
 from bill_parser import extract_bill, BillData, generic_to_legacy
-from orchestrator import extract_bill_pipeline
+from orchestrator import extract_bill_pipeline, extract_bill_from_image
 from bill_verification import (
     validate_cross_reference,
     compute_verification,
@@ -476,16 +476,16 @@ def main():
         if analysis_mode == "Single File":
             uploaded_file = st.file_uploader(
                 "Energy Data File",
-                type=['csv', 'xlsx', 'xls', 'pdf'],
-                help="Upload an ESB Networks HDF file (CSV), Excel spreadsheet, or electricity bill (PDF)",
+                type=['csv', 'xlsx', 'xls', 'pdf', 'jpg', 'jpeg', 'png'],
+                help="Upload an ESB Networks HDF file (CSV), Excel spreadsheet, or electricity bill (PDF/JPG/PNG)",
                 label_visibility="collapsed"
             )
         else:
             uploaded_files = st.file_uploader(
-                "Upload Bills (PDF)",
-                type=['pdf'],
+                "Upload Bills (PDF/Image)",
+                type=['pdf', 'jpg', 'jpeg', 'png'],
                 accept_multiple_files=True,
-                help="Upload 2 or more electricity bills for side-by-side comparison",
+                help="Upload 2 or more electricity bills (PDF or photographed) for side-by-side comparison",
                 label_visibility="collapsed",
                 key="comparison_uploader",
             )
@@ -502,15 +502,17 @@ def main():
         - Excel spreadsheets (.xlsx, .xls)
         - CSV files with energy data
         - Electricity bills (PDF)
+        - Photographed bills (JPG, PNG)
         """)
 
         st.divider()
 
         # Hide tariff panel during bill PDF view (rates come from bill itself)
+        _bill_extensions = ('.pdf', '.jpg', '.jpeg', '.png')
         _is_bill_upload = (
             analysis_mode == "Bill Comparison"
-            or (uploaded_file is not None and uploaded_file.name.lower().endswith('.pdf'))
-            or st.session_state.get("_demo_file_name", "").lower().endswith('.pdf')
+            or (uploaded_file is not None and uploaded_file.name.lower().endswith(_bill_extensions))
+            or st.session_state.get("_demo_file_name", "").lower().endswith(_bill_extensions)
         )
 
         if _is_bill_upload:
@@ -602,14 +604,14 @@ def main():
         if uploaded_files and len(uploaded_files) >= 2:
             _handle_bill_comparison(uploaded_files)
         elif uploaded_files:
-            st.info("Upload at least 2 electricity bills (PDF) for comparison.")
+            st.info("Upload at least 2 electricity bills (PDF or image) for comparison.")
         else:
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 st.markdown("---")
                 st.markdown("### 📊 Bill Comparison")
                 st.markdown(
-                    "Upload 2 or more electricity bill PDFs using the sidebar "
+                    "Upload 2 or more electricity bills (PDF or photo) using the sidebar "
                     "to compare costs, consumption, and rates across billing periods."
                 )
                 st.markdown("")
@@ -638,6 +640,8 @@ def main():
     # Detect file type and route accordingly
     if filename.lower().endswith('.pdf'):
         _handle_bill_pdf(file_content, filename)
+    elif filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+        _handle_bill_image(file_content, filename)
     elif _is_hdf_file(file_content):
         _handle_hdf_file(file_content, filename)
     else:
@@ -729,8 +733,8 @@ def _handle_verification_sidebar(hdf_df: pd.DataFrame) -> VerificationResult | N
         st.caption("Upload a bill PDF to cross-check against this meter data.")
 
         verification_pdf = st.file_uploader(
-            "Bill PDF for verification",
-            type=['pdf'],
+            "Bill for verification",
+            type=['pdf', 'jpg', 'jpeg', 'png'],
             key="verification_bill_uploader",
             label_visibility="collapsed",
         )
@@ -749,7 +753,11 @@ def _handle_verification_sidebar(hdf_df: pd.DataFrame) -> VerificationResult | N
         if st.session_state.get("_verification_cache_key") != v_key:
             try:
                 with st.spinner("Extracting bill for verification..."):
-                    pipeline_result = extract_bill_pipeline(v_content)
+                    v_name = verification_pdf.name.lower()
+                    if v_name.endswith(('.jpg', '.jpeg', '.png')):
+                        pipeline_result = extract_bill_from_image(v_content)
+                    else:
+                        pipeline_result = extract_bill_pipeline(v_content)
                     bill = generic_to_legacy(pipeline_result.bill)
 
                     # Validate cross-reference
@@ -1206,6 +1214,11 @@ def show_welcome():
         - Upload a scanned or digital electricity bill
         - Auto-extracts supplier, consumption, costs, and balance
         - Supports Energia, Electric Ireland, SSE Airtricity, and more
+
+        **Photographed Bill (JPG, PNG)**
+        - Upload a photo of a paper bill
+        - Uses OCR and AI vision to extract data
+        - Best results with clear, well-lit photos
         """)
 
 
@@ -1224,6 +1237,28 @@ def _handle_bill_pdf(file_content: bytes, filename: str):
         except Exception as e:
             st.error(f"Error extracting bill: {str(e)}")
             st.info("Please ensure this is a valid electricity bill PDF.")
+            return
+
+    bill = st.session_state._bill_cached_result
+    raw_text = st.session_state.get("_bill_raw_text")
+    show_bill_summary(bill, raw_text=raw_text)
+
+
+def _handle_bill_image(file_content: bytes, filename: str):
+    """Handle image bill upload (JPG/PNG) — extract and display summary."""
+    content_hash = hashlib.md5(file_content).hexdigest()
+    bill_key = f"bill_img_{filename}_{len(file_content)}_{content_hash}"
+    if st.session_state.get("_bill_cache_key") != bill_key:
+        try:
+            with st.spinner("Extracting bill from image..."):
+                pipeline_result = extract_bill_from_image(file_content)
+                bill = generic_to_legacy(pipeline_result.bill)
+                st.session_state._bill_cache_key = bill_key
+                st.session_state._bill_cached_result = bill
+                st.session_state._bill_raw_text = pipeline_result.bill.raw_text
+        except Exception as e:
+            st.error(f"Error extracting bill from image: {str(e)}")
+            st.info("Please ensure this is a clear photo of an electricity bill.")
             return
 
     bill = st.session_state._bill_cached_result
@@ -1274,6 +1309,16 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None):
             f"(confidence: {confidence_pct}%)\n\n"
             f"{section_summary}\n\n"
             "Please verify fields marked with a warning icon."
+        )
+
+
+    # --- Extraction Method Info (for debugging/transparency) ---
+    if bill.extraction_method:
+        st.markdown(
+            f'<div style="padding: 0.4rem 0.8rem; background: #1e293b; border-radius: 4px; '
+            f'margin-bottom: 0.8rem; color: #94a3b8; font-size: 0.8rem;">'
+            f'<strong>Extraction path:</strong> {bill.extraction_method}</div>',
+            unsafe_allow_html=True,
         )
 
     # --- Extraction Warnings (immediately after confidence banner) ---
@@ -2645,7 +2690,10 @@ def _handle_bill_comparison(uploaded_files):
                 text=f"Extracting {filename}...",
             )
             try:
-                pipeline_result = extract_bill_pipeline(content)
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    pipeline_result = extract_bill_from_image(content)
+                else:
+                    pipeline_result = extract_bill_pipeline(content)
                 bill = generic_to_legacy(pipeline_result.bill)
                 bills.append((bill, filename))
             except Exception as e:

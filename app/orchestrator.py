@@ -35,7 +35,7 @@ from pipeline import (
     PROVIDER_BILL_TYPE,
 )
 from provider_configs import get_provider_config
-from spatial_extraction import extract_tier2_spatial
+from spatial_extraction import extract_tier2_spatial, get_ocr_text
 from llm_extraction import extract_tier4_llm, merge_llm_with_existing, Tier4ExtractionResult
 
 log = logging.getLogger(__name__)
@@ -521,5 +521,158 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
         tier3=tier3,
         tier2=tier2,
         tier4=tier4,
+        extraction_path=extraction_path,
+    )
+
+
+def extract_bill_from_image(source: bytes | str) -> PipelineResult:
+    """Extract structured bill data from a JPG/PNG image.
+
+    Skips Tier 0 (PyMuPDF) since there is no PDF. Instead goes directly
+    to spatial OCR on the image, falling back to Tier 4 LLM vision.
+
+    Args:
+        source: Image file path (str) or raw image bytes.
+
+    Returns:
+        PipelineResult with bill data, confidence, and extraction metadata.
+    """
+    extraction_path: list[str] = ["image_input"]
+
+    # Synthetic Tier 0 result — no PDF text extraction
+    tier0 = TextExtractionResult(
+        extracted_text="",
+        page_count=1,
+        is_native_text=False,
+        chars_per_page=[0],
+        metadata={},
+    )
+
+    # ---- Spatial OCR directly on the image ----
+    extraction_path.append("tier2_spatial")
+    try:
+        spatial_result, avg_ocr_conf, ocr_df, ocr_text = extract_tier2_spatial(
+            source, is_image=True,
+        )
+    except Exception as e:
+        log.warning("Spatial extraction failed for image: %s", e, exc_info=True)
+        spatial_result = None
+        avg_ocr_conf = None
+        ocr_text = ""
+
+    text = ocr_text or ""
+
+    if spatial_result is not None and spatial_result.field_count > 0:
+        extraction_fields = spatial_result.fields
+
+        try:
+            provider_result = detect_provider(text)
+        except Exception:
+            provider_result = ProviderDetectionResult(
+                provider_name="unknown", is_known=False,
+            )
+
+        extraction_path.append(
+            f"tier1_{'known' if provider_result.is_known else 'unknown'}"
+        )
+        provider_name = provider_result.provider_name
+
+        # Try Tier 3 config on OCR text if provider is known
+        config = get_provider_config(provider_name) if provider_result.is_known else None
+        tier3 = None
+        if config is not None:
+            tier3 = extract_with_config(text, provider_name)
+            extraction_path.append(f"tier3_{provider_name.lower().replace(' ', '_')}")
+            for fname, fval in tier3.fields.items():
+                if fname not in extraction_fields:
+                    extraction_fields[fname] = fval
+
+        bill_type = PROVIDER_BILL_TYPE.get(provider_name)
+        confidence = calculate_confidence(
+            extraction_fields,
+            provider=provider_name,
+            bill_type=bill_type,
+            avg_ocr_confidence=avg_ocr_conf,
+        )
+
+        build_result = Tier3ExtractionResult(
+            provider=provider_name,
+            fields=extraction_fields,
+            field_count=len(extraction_fields),
+            hit_rate=spatial_result.hit_rate,
+            warnings=spatial_result.warnings,
+        )
+
+        extraction_method = " → ".join(extraction_path)
+        bill = _build_bill(build_result, provider_name, confidence, extraction_method, text)
+
+        return PipelineResult(
+            bill=bill,
+            confidence=confidence,
+            tier0=tier0,
+            provider_detection=provider_result,
+            tier3=tier3,
+            tier2=spatial_result,
+            extraction_path=extraction_path,
+        )
+
+    # ---- Fallback: Tier 4 LLM vision ----
+    tier4 = _try_tier4_llm(source, extraction_path, is_image=True)
+    if tier4 is not None and tier4.field_count > 0:
+        extraction_fields = tier4.fields
+        provider_name = _detect_provider_from_fields(tier4.fields)
+        provider_result = ProviderDetectionResult(
+            provider_name=provider_name,
+            is_known=provider_name != "unknown",
+        )
+        extraction_path.append(
+            f"tier1_{'known' if provider_result.is_known else 'unknown'}"
+        )
+
+        bill_type = PROVIDER_BILL_TYPE.get(provider_name)
+        confidence = calculate_confidence(
+            extraction_fields,
+            provider=provider_name,
+            bill_type=bill_type,
+        )
+
+        build_result = Tier3ExtractionResult(
+            provider=provider_name,
+            fields=extraction_fields,
+            field_count=len(extraction_fields),
+            hit_rate=tier4.hit_rate,
+            warnings=tier4.warnings,
+        )
+
+        extraction_method = " → ".join(extraction_path)
+        bill = _build_bill(build_result, provider_name, confidence, extraction_method, text)
+
+        return PipelineResult(
+            bill=bill,
+            confidence=confidence,
+            tier0=tier0,
+            provider_detection=provider_result,
+            tier4=tier4,
+            extraction_path=extraction_path,
+        )
+
+    # ---- Nothing worked ----
+    extraction_path.append("insufficient_text")
+    empty_provider = ProviderDetectionResult(
+        provider_name="unknown", is_known=False,
+    )
+    empty_fields: dict[str, FieldExtractionResult] = {}
+    empty_confidence = calculate_confidence(empty_fields)
+    bill = GenericBillData(
+        extraction_method="image_extraction_failed",
+        confidence_score=empty_confidence.score,
+        raw_text=text,
+        warnings=["Image extraction failed - OCR and LLM vision produced no results"],
+    )
+    return PipelineResult(
+        bill=bill,
+        confidence=empty_confidence,
+        tier0=tier0,
+        provider_detection=empty_provider,
         extraction_path=extraction_path,
     )

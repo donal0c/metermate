@@ -32,12 +32,14 @@ BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
 STREAMLIT_PORT = 8599  # Non-standard port to avoid conflicts
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def streamlit_app():
     """Start the Streamlit app as a subprocess and yield the URL."""
+    # Use sys.executable to ensure we use the same Python that's running pytest
+    import sys
     proc = subprocess.Popen(
         [
-            "python3", "-m", "streamlit", "run", APP_PATH,
+            sys.executable, "-m", "streamlit", "run", APP_PATH,
             "--server.port", str(STREAMLIT_PORT),
             "--server.headless", "true",
             "--browser.gatherUsageStats", "false",
@@ -67,21 +69,32 @@ def streamlit_app():
     proc.wait(timeout=10)
 
 
+@pytest.fixture(autouse=True)
+def cleanup_after_test(page: Page, streamlit_app: str):
+    """Navigate home after each test to reset Streamlit state."""
+    yield
+    page.goto(streamlit_app)
+    page.wait_for_timeout(1000)
+
+
 class TestAppStartup:
     """Verify the Streamlit app starts and shows the welcome page."""
 
     def test_welcome_page_loads(self, page: Page, streamlit_app: str):
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
-        # The welcome heading should be visible
-        expect(page.get_by_text("Welcome to Energy Insight")).to_be_visible(timeout=15000)
+        page.wait_for_timeout(5000)  # Wait for React components
+        # The welcome heading should be visible (with emoji)
+        expect(page.locator("text=/Welcome to Energy Insight/")).to_be_visible(timeout=15000)
 
     def test_file_uploader_visible(self, page: Page, streamlit_app: str):
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(5000)  # Wait for React components
         # The sidebar should have a file uploader
+        expect(page.locator('[data-testid="stSidebar"]')).to_be_visible(timeout=30000)
         uploader = page.locator('[data-testid="stFileUploader"]')
-        expect(uploader).to_be_visible(timeout=15000)
+        expect(uploader).to_be_visible(timeout=30000)
 
     def test_demo_buttons_on_welcome_page(self, page: Page, streamlit_app: str):
         """Welcome page should show demo buttons for sample data."""
@@ -146,13 +159,19 @@ class TestBillPDFUpload:
 
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(5000)  # Wait for Streamlit React components
+
+        # Wait for sidebar and uploader to be ready
+        expect(page.locator('[data-testid="stSidebar"]')).to_be_visible(timeout=30000)
+        expect(page.locator('[data-testid="stFileUploader"]')).to_be_visible(timeout=30000)
 
         # Find the file input and upload
         file_input = page.locator('[data-testid="stFileUploader"] input[type="file"]')
+        expect(file_input).to_be_attached(timeout=30000)
         file_input.set_input_files(pdf_path)
 
-        # Wait for extraction to complete (spinner disappears)
-        page.wait_for_timeout(3000)
+        # Wait for extraction to complete
+        page.wait_for_timeout(10000)
 
     def test_go_power_bill_extraction(self, page: Page, streamlit_app: str):
         """Upload Go Power bill and verify extraction produces results.
@@ -239,10 +258,18 @@ class TestBillSummaryDisplay:
 
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(5000)  # Wait for Streamlit React components
+
+        # Wait for sidebar and uploader to be ready
+        expect(page.locator('[data-testid="stSidebar"]')).to_be_visible(timeout=30000)
+        expect(page.locator('[data-testid="stFileUploader"]')).to_be_visible(timeout=30000)
 
         file_input = page.locator('[data-testid="stFileUploader"] input[type="file"]')
+        expect(file_input).to_be_attached(timeout=30000)
         file_input.set_input_files(pdf_path)
-        page.wait_for_timeout(3000)
+
+        # Wait for extraction to complete
+        page.wait_for_timeout(10000)
 
     def test_per_section_breakdown_displayed(self, page: Page, streamlit_app: str):
         """Confidence banner should show per-section field breakdown."""
