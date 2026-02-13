@@ -84,15 +84,14 @@ class TestAppStartup:
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(5000)  # Wait for React components
-        # The welcome heading should be visible (with emoji)
-        expect(page.locator("text=/Welcome to Energy Insight/")).to_be_visible(timeout=15000)
+        # The landing page title should be visible
+        expect(page.locator("text=Energy Insight").first).to_be_visible(timeout=15000)
 
     def test_file_uploader_visible(self, page: Page, streamlit_app: str):
-        page.goto(streamlit_app)
+        page.goto(f"{streamlit_app}/Bill_Extractor")
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(5000)  # Wait for React components
-        # The sidebar should have a file uploader
-        expect(page.locator('[data-testid="stSidebar"]')).to_be_visible(timeout=30000)
+        # The Bill Extractor page should have a file uploader
         uploader = page.locator('[data-testid="stFileUploader"]')
         expect(uploader).to_be_visible(timeout=30000)
 
@@ -113,7 +112,7 @@ class TestAppStartup:
         page.wait_for_load_state("networkidle")
 
         # Click the demo bill button
-        bill_button = page.get_by_text("Try sample bill")
+        bill_button = page.get_by_text("Sample bill")
         if bill_button.count() > 0:
             bill_button.click()
             page.wait_for_timeout(5000)
@@ -132,7 +131,7 @@ class TestAppStartup:
         page.wait_for_load_state("networkidle")
 
         # Click the demo HDF button
-        hdf_button = page.get_by_text("Try sample HDF data")
+        hdf_button = page.get_by_text("Sample HDF data")
         if hdf_button.count() > 0:
             hdf_button.click()
             page.wait_for_timeout(5000)

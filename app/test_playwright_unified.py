@@ -332,7 +332,7 @@ class TestDemoBillButton:
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(3000)
 
-        bill_button = page.get_by_text("Try sample bill")
+        bill_button = page.get_by_text("Sample bill")
         if bill_button.count() > 0:
             bill_button.click()
             page.wait_for_timeout(10000)

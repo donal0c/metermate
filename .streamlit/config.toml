@@ -7,3 +7,6 @@ textColor = "#fafafa"
 [server]
 headless = true
 maxUploadSize = 200
+
+[ui]
+hideTopBar = true

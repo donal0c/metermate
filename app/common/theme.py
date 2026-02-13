@@ -226,9 +226,138 @@ _THEME_CSS = """
         border-color: #2d3548 !important;
     }
 
+    /* Hide Streamlit platform artifacts */
+    .stDeployButton, [data-testid="stToolbar"] {
+        display: none !important;
+    }
+
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+    }
+
     /* Checkboxes */
     .stCheckbox label span {
         color: #e2e8f0 !important;
+    }
+
+    /* Workflow cards on landing page */
+    .workflow-card {
+        flex: 1;
+        display: block;
+        text-decoration: none !important;
+        background: #1e2433;
+        border: 1px solid #2d3548;
+        border-radius: 12px;
+        padding: 2rem;
+        transition: all 0.2s ease;
+        cursor: pointer;
+    }
+
+    .workflow-card:hover {
+        border-color: #4ade80 !important;
+        box-shadow: 0 8px 24px rgba(74, 222, 128, 0.15);
+        transform: translateY(-2px) scale(1.02);
+    }
+
+    .workflow-card .card-arrow {
+        opacity: 0.5;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .workflow-card:hover .card-arrow {
+        opacity: 1;
+        transform: translateX(4px);
+    }
+
+    /* Empty state cards */
+    .empty-state-card {
+        text-align: center;
+        padding: 3rem 2rem;
+        background: linear-gradient(135deg, #1e2433 0%, #151a24 100%);
+        border: 1px solid #2d3548;
+        border-radius: 16px;
+        margin: 1.5rem auto;
+        max-width: 600px;
+    }
+
+    .empty-state-card .empty-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        opacity: 0.9;
+    }
+
+    .empty-state-card h3 {
+        color: #ffffff !important;
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 1.4rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    .empty-state-card p {
+        color: #94a3b8 !important;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        margin-bottom: 0.5rem;
+    }
+
+    .empty-state-card .format-tags {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+
+    .empty-state-card .format-tag {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        background: #0f1419;
+        border: 1px solid #2d3548;
+        border-radius: 20px;
+        color: #94a3b8 !important;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.8rem;
+    }
+
+    /* Error state for failed extraction */
+    .extraction-failed-card {
+        padding: 2rem;
+        background: linear-gradient(135deg, rgba(239,68,68,0.05) 0%, #151a24 100%);
+        border: 1px solid rgba(239,68,68,0.2);
+        border-radius: 12px;
+        margin: 1rem 0;
+    }
+
+    .extraction-failed-card h4 {
+        color: #ef4444 !important;
+        font-family: 'DM Sans', sans-serif !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    .extraction-failed-card .suggestion-list {
+        color: #cbd5e1 !important;
+        font-size: 0.9rem;
+        line-height: 1.8;
+        padding-left: 1rem;
+    }
+
+    .extraction-failed-card .suggestion-list li {
+        color: #cbd5e1 !important;
+    }
+
+    /* Sample data link-style buttons */
+    [data-testid="stBaseButton-secondary"] {
+        background: transparent !important;
+        color: #94a3b8 !important;
+        border: none !important;
+        font-weight: 400 !important;
+        padding: 0.25rem 0.5rem !important;
+    }
+
+    [data-testid="stBaseButton-secondary"]:hover {
+        color: #4ade80 !important;
+        background: transparent !important;
+        text-decoration: underline !important;
     }
 </style>
 """

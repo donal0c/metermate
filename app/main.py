@@ -1,7 +1,7 @@
-"""Energy Insight - Smart Meter Data Analysis Tool
+"""Energy Insight - Task-Oriented Landing Page
 
-Home page for the Streamlit multipage app. Navigate to Bill Extractor
-or Meter Analysis using the sidebar.
+Home page for the Streamlit multipage app. Provides two clear workflow
+cards (Bill Extractor, Meter Analysis) and subtle sample-data links.
 """
 
 import os
@@ -15,7 +15,7 @@ st.set_page_config(
     page_title="Energy Insight",
     page_icon="\u26a1",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Apply dark theme from shared module
@@ -30,109 +30,94 @@ def _load_logo():
     return None
 
 
-# --- Sidebar ---
+# --- Sidebar (minimal - just logo) ---
 with st.sidebar:
     logo_path = _load_logo()
     if logo_path:
         st.image(str(logo_path), width=180)
-        st.divider()
 
-    st.markdown("### About")
-    st.markdown("""
-    Analyze energy consumption data to generate insights
-    and visualizations for professional energy audits.
-
-    **Supported formats:**
-    - ESB Networks HDF (30-min CSV)
-    - Excel spreadsheets (.xlsx, .xls)
-    - CSV files with energy data
-    - Electricity bills (PDF)
-    - Photographed bills (JPG, PNG)
-    """)
-
-# --- Main content ---
-st.markdown("## \u26a1 Energy Insight")
-st.caption("Smart Meter Analysis for Energy Audits")
-
-col1, col2, col3 = st.columns([1, 2, 1])
-
-with col2:
-    st.markdown("---")
-    st.markdown("### \U0001f44b Welcome to Energy Insight")
-    st.markdown("Upload an energy data file to get started \u2014 use the sidebar to navigate to the right tool.")
+# --- Hero Section ---
+_, hero_col, _ = st.columns([1, 3, 1])
+with hero_col:
+    st.markdown("## \u26a1 Energy Insight")
+    st.caption("Cork Energy Consultancy")
+    st.markdown("Upload bills or meter data to get started.")
 
     st.markdown("")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("**\U0001f4c4 Bill Extractor**")
-        st.caption("Extract data from PDF or photographed electricity bills. Compare multiple bills side-by-side.")
+    # --- Workflow Cards ---
+    _CARD_HTML = """
+    <div data-testid="workflow-cards" style="display: flex; gap: 1.5rem; margin: 1rem 0 2rem 0;">
+        <a href="/Bill_Extractor" target="_self" data-testid="card-bill-extractor"
+           class="workflow-card"
+           style="flex: 1; display: block; text-decoration: none;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">\U0001f4c4</div>
+            <div style="color: #ffffff !important; font-family: 'DM Sans', sans-serif;
+                        font-size: 1.3rem; font-weight: 600; margin-bottom: 0.5rem;">
+                Extract Bills
+            </div>
+            <div style="color: #94a3b8 !important; font-size: 0.95rem; line-height: 1.5;">
+                Upload PDF or photographed electricity bills.
+                Extract costs, consumption, and rates automatically.
+            </div>
+            <div class="card-arrow"
+                 style="color: #4ade80; font-size: 0.9rem; margin-top: 1rem;">
+                Bill Extractor \u2192
+            </div>
+        </a>
+        <a href="/Meter_Analysis" target="_self" data-testid="card-meter-analysis"
+           class="workflow-card"
+           style="flex: 1; display: block; text-decoration: none;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">\U0001f4ca</div>
+            <div style="color: #ffffff !important; font-family: 'DM Sans', sans-serif;
+                        font-size: 1.3rem; font-weight: 600; margin-bottom: 0.5rem;">
+                Analyse Meter Data
+            </div>
+            <div style="color: #94a3b8 !important; font-size: 0.95rem; line-height: 1.5;">
+                Upload ESB Networks HDF or Excel files.
+                Heatmaps, anomaly detection, and insights.
+            </div>
+            <div class="card-arrow"
+                 style="color: #4ade80; font-size: 0.9rem; margin-top: 1rem;">
+                Meter Analysis \u2192
+            </div>
+        </a>
+    </div>
+    """
+    st.markdown(_CARD_HTML, unsafe_allow_html=True)
 
-        st.markdown("**\U0001f4ca Key Metrics**")
-        st.caption("Total consumption, baseload, peak demand")
-
-    with col_b:
-        st.markdown("**\U0001f4c8 Meter Analysis**")
-        st.caption("Analyze HDF, Excel, or CSV energy data with heatmaps, trend charts, and anomaly detection.")
-
-        st.markdown("**\U0001f4e5 Excel Export**")
-        st.caption("Audit-ready data exports")
-
-    st.markdown("---")
-
-    # Demo buttons
-    st.markdown("#### Try It Now")
-    demo_col1, demo_col2 = st.columns(2)
-
+    # --- Sample Data (subtle text links) ---
     _sample_dir = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
     _hdf_path = os.path.join(os.path.dirname(__file__), "..",
                              "HDF_calckWh_10306268587_03-02-2026.csv")
 
-    with demo_col1:
+    st.markdown(
+        '<div style="color: #64748b; font-size: 0.85rem; margin-top: 0.5rem;">'
+        'Or try with sample data:</div>',
+        unsafe_allow_html=True,
+    )
+
+    sample_col1, sample_col2, _ = st.columns([1, 1, 2])
+
+    with sample_col1:
         if os.path.exists(_hdf_path):
-            if st.button("\U0001f4ca Try sample HDF data", use_container_width=True):
+            if st.button("Sample HDF data", key="demo_hdf", type="secondary"):
                 with open(_hdf_path, "rb") as f:
                     st.session_state._demo_file_content = f.read()
                 st.session_state._demo_file_name = "HDF_sample.csv"
                 st.switch_page("pages/2_Meter_Analysis.py")
         else:
-            st.button("\U0001f4ca Sample HDF (not found)", disabled=True,
-                      use_container_width=True)
+            st.button("Sample HDF data", key="demo_hdf",
+                      type="secondary", disabled=True)
 
-    with demo_col2:
+    with sample_col2:
         _sample_bill = os.path.join(_sample_dir, "1845.pdf")
         if os.path.exists(_sample_bill):
-            if st.button("\U0001f4c4 Try sample bill", use_container_width=True):
+            if st.button("Sample bill", key="demo_bill", type="secondary"):
                 with open(_sample_bill, "rb") as f:
                     st.session_state._demo_file_content = f.read()
                 st.session_state._demo_file_name = "sample_bill.pdf"
                 st.switch_page("pages/1_Bill_Extractor.py")
         else:
-            st.button("\U0001f4c4 Sample bill (not found)", disabled=True,
-                      use_container_width=True)
-
-    st.markdown("---")
-
-    st.markdown("#### Supported Formats")
-    st.markdown("""
-    **ESB Networks HDF** (recommended)
-    1. Log into [ESB Networks Portal](https://myaccount.esbnetworks.ie/)
-    2. Navigate to **My Usage** \u2192 **Download Data**
-    3. Select "30 Minute Readings in kWh"
-    4. Download and upload via **Meter Analysis**
-
-    **Excel / CSV**
-    - Upload any spreadsheet with energy consumption data
-    - Columns are auto-detected (date, kWh, MPRN, cost)
-    - Works with ESB, Electric Ireland, SSE Airtricity, Flogas exports
-
-    **Electricity Bill (PDF)**
-    - Upload a scanned or digital electricity bill
-    - Auto-extracts supplier, consumption, costs, and balance
-    - Supports Energia, Electric Ireland, SSE Airtricity, and more
-
-    **Photographed Bill (JPG, PNG)**
-    - Upload a photo of a paper bill
-    - Uses OCR and AI vision to extract data
-    - Best results with clear, well-lit photos
-    """)
+            st.button("Sample bill", key="demo_bill",
+                      type="secondary", disabled=True)

@@ -167,21 +167,23 @@ class TestValidateCrossReference:
         assert "does not match" in result.block_reason
         assert result.mprn_match is False
 
-    def test_no_mprn_on_bill_blocks(self):
+    def test_no_mprn_on_bill_proceeds_gracefully(self):
         hdf_df = _make_hdf_df()
         bill = _make_bill(mprn=None)
         result = validate_cross_reference(hdf_df, "10306268587", bill)
 
-        assert result.valid is False
-        assert "no MPRN" in result.block_reason
+        assert result.valid is True
+        assert result.mprn_skipped is True
+        assert any("MPRN not detected" in i for i in result.issues)
 
-    def test_no_billing_dates_blocks(self):
+    def test_no_billing_dates_signals_manual_dates(self):
         hdf_df = _make_hdf_df()
         bill = _make_bill(billing_start=None, billing_end=None)
         result = validate_cross_reference(hdf_df, "10306268587", bill)
 
         assert result.valid is False
-        assert "no billing period" in result.block_reason
+        assert result.needs_manual_dates is True
+        assert result.hdf_start is not None  # HDF range populated for UI
 
     def test_zero_overlap_blocks(self):
         # HDF covers March 2025, bill covers June 2025
@@ -190,7 +192,7 @@ class TestValidateCrossReference:
         result = validate_cross_reference(hdf_df, "10306268587", bill)
 
         assert result.valid is False
-        assert "falls outside" in result.block_reason
+        assert "doesn't overlap" in result.block_reason
 
     def test_partial_overlap_warns(self):
         # HDF covers March 1-15, bill covers full March
@@ -201,6 +203,30 @@ class TestValidateCrossReference:
         assert result.valid is True
         assert result.overlap_pct < 100
         assert any("may not be representative" in i for i in result.issues)
+
+    def test_override_dates_used_when_bill_has_none(self):
+        from datetime import date
+        hdf_df = _make_hdf_df()
+        bill = _make_bill(billing_start=None, billing_end=None)
+        result = validate_cross_reference(
+            hdf_df, "10306268587", bill,
+            override_start=date(2025, 3, 1),
+            override_end=date(2025, 3, 31),
+        )
+
+        assert result.valid is True
+        assert result.needs_manual_dates is False
+        assert result.bill_start == date(2025, 3, 1)
+        assert result.bill_end == date(2025, 3, 31)
+
+    def test_no_mprn_with_dates_computes_verification(self):
+        hdf_df = _make_hdf_df()
+        bill = _make_bill(mprn=None)
+        result = validate_cross_reference(hdf_df, "10306268587", bill)
+        assert result.valid is True
+
+        result = compute_verification(hdf_df, bill, result)
+        assert result.hdf_total_kwh > 0
 
 
 # ---------------------------------------------------------------------------

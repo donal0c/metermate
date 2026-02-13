@@ -66,7 +66,7 @@ LAYOUT_TEMPLATE = dict(
         font_size=13,
         font_family='DM Sans'
     ),
-    margin=dict(l=0, r=0, t=40, b=0)
+    margin=dict(l=0, r=20, t=40, b=0)
 )
 
 DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -79,7 +79,11 @@ def apply_dark_theme(fig: go.Figure) -> go.Figure:
 
 
 def _apply_anomaly_annotations(fig: go.Figure, chart_name: str, anomalies: list | None):
-    """Apply chart annotations from anomaly dicts to a figure."""
+    """Apply chart annotations from anomaly dicts to a figure.
+
+    Ensures annotations stay within the plot area by setting xanchor/yanchor
+    on annotations near chart edges.
+    """
     if not anomalies:
         return
     for a in anomalies:
@@ -93,6 +97,9 @@ def _apply_anomaly_annotations(fig: go.Figure, chart_name: str, anomalies: list 
             elif annot_type == 'vrect':
                 fig.add_vrect(**params)
             elif annot_type == 'annotation':
+                # Default to xanchor='left' to prevent right-edge clipping
+                if 'xanchor' not in params:
+                    params.setdefault('xanchor', 'left')
                 fig.add_annotation(**params)
 
 
@@ -158,15 +165,15 @@ def create_daily_profile(df: pd.DataFrame, anomalies: list = None) -> go.Figure:
     fig = go.Figure()
 
     # Add shaded areas for tariff periods
-    # Night period (23:00-08:00)
-    fig.add_vrect(x0=23, x1=24, fillcolor=COLORS['night'], opacity=0.1, line_width=0,
-                  annotation_text="Night", annotation_position="top left",
+    # Night period (23:00-08:00) — label on the 0-8 band to avoid right-edge clipping
+    fig.add_vrect(x0=23, x1=24, fillcolor=COLORS['night'], opacity=0.1, line_width=0)
+    fig.add_vrect(x0=0, x1=8, fillcolor=COLORS['night'], opacity=0.1, line_width=0,
+                  annotation_text="Night", annotation_position="top right",
                   annotation=dict(font_color=COLORS['text'], font_size=10))
-    fig.add_vrect(x0=0, x1=8, fillcolor=COLORS['night'], opacity=0.1, line_width=0)
 
     # Peak period (17:00-19:00)
     fig.add_vrect(x0=17, x1=19, fillcolor=COLORS['peak'], opacity=0.15, line_width=0,
-                  annotation_text="Peak", annotation_position="top left",
+                  annotation_text="Peak", annotation_position="top right",
                   annotation=dict(font_color=COLORS['text'], font_size=10))
 
     # Weekday line with area

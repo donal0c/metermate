@@ -84,8 +84,75 @@ def _get_tariff_rates() -> dict:
     }
 
 
-def _render_date_filter_sidebar(df: pd.DataFrame):
-    """Render date range filter controls in the sidebar. Returns filtered df."""
+def _render_tariff_config():
+    """Render tariff rate configuration as an in-page expandable section."""
+    provider_names = list(PROVIDER_PRESETS.keys())
+
+    def _on_provider_change():
+        """Callback: update rate widget keys when provider changes."""
+        provider = st.session_state._tariff_provider_widget
+        if provider != 'Custom':
+            preset = PROVIDER_PRESETS[provider]
+            st.session_state._tariff_day_widget = preset['day']
+            st.session_state._tariff_night_widget = preset['night']
+            st.session_state._tariff_peak_widget = preset['peak']
+        st.session_state.tariff_provider = provider
+
+    def _on_rate_change():
+        """Callback: switch to Custom when user manually edits a rate."""
+        if st.session_state.tariff_provider != 'Custom':
+            current_preset = PROVIDER_PRESETS.get(st.session_state.tariff_provider, {})
+            if (abs(st.session_state._tariff_day_widget - current_preset.get('day', 0)) > 0.001 or
+                abs(st.session_state._tariff_night_widget - current_preset.get('night', 0)) > 0.001 or
+                abs(st.session_state._tariff_peak_widget - current_preset.get('peak', 0)) > 0.001):
+                st.session_state.tariff_provider = 'Custom'
+
+    current_provider = st.session_state.tariff_provider
+    with st.expander(f"Tariff Rates — {current_provider}", expanded=False):
+        col_provider, col_day, col_night, col_peak = st.columns([2, 1, 1, 1])
+
+        with col_provider:
+            st.selectbox(
+                "Electricity Provider",
+                options=provider_names,
+                index=provider_names.index(st.session_state.tariff_provider),
+                key='_tariff_provider_widget',
+                on_change=_on_provider_change,
+            )
+
+        with col_day:
+            st.number_input(
+                "Day (c/kWh)",
+                min_value=0.0, max_value=100.0,
+                step=0.5, format="%.2f",
+                key='_tariff_day_widget',
+                on_change=_on_rate_change,
+            )
+        with col_night:
+            st.number_input(
+                "Night (c/kWh)",
+                min_value=0.0, max_value=100.0,
+                step=0.5, format="%.2f",
+                key='_tariff_night_widget',
+                on_change=_on_rate_change,
+            )
+        with col_peak:
+            st.number_input(
+                "Peak (c/kWh)",
+                min_value=0.0, max_value=100.0,
+                step=0.5, format="%.2f",
+                key='_tariff_peak_widget',
+                on_change=_on_rate_change,
+            )
+
+        st.caption("Rates inc. VAT. Verify against client's bill.")
+
+
+def _render_filter_bar(df: pd.DataFrame):
+    """Render date range and load type filters as in-page pill buttons and toggle chips.
+
+    Returns the filtered DataFrame.
+    """
     if 'date' not in df.columns and 'datetime' not in df.columns:
         return df
 
@@ -99,98 +166,94 @@ def _render_date_filter_sidebar(df: pd.DataFrame):
 
     selected_periods = None
 
-    with st.sidebar:
-        st.markdown("### Date Range")
+    # Initialise filter state
+    if 'date_filter_period' not in st.session_state:
+        st.session_state.date_filter_period = "All Data"
 
-        period_options = [
-            "All Data",
-            "Last 7 Days",
-            "Last 30 Days",
-            "Last 90 Days",
-            "Specific Month",
-            "Custom Range",
-        ]
+    # --- Date Range pill buttons ---
+    period_labels = ["All Data", "Last 7d", "Last 30d", "Last 90d", "Custom"]
+    period_map = {
+        "All Data": "All Data",
+        "Last 7d": "Last 7 Days",
+        "Last 30d": "Last 30 Days",
+        "Last 90d": "Last 90 Days",
+        "Custom": "Custom Range",
+    }
+    # Reverse lookup for current state
+    reverse_map = {v: k for k, v in period_map.items()}
+    current_label = reverse_map.get(st.session_state.date_filter_period, "All Data")
 
-        if 'date_filter_period' not in st.session_state:
-            st.session_state.date_filter_period = "All Data"
+    # Build pill button row with load type chips
+    has_tariff = 'tariff_period' in df.columns
 
-        period = st.selectbox(
-            "Period",
-            options=period_options,
-            index=period_options.index(st.session_state.date_filter_period),
-            key="_date_filter_period_widget",
+    # Use columns: date pills on left, load type chips on right
+    if has_tariff:
+        col_date, col_load = st.columns([3, 2])
+    else:
+        col_date, _ = st.columns([3, 2])
+
+    with col_date:
+        # Use segmented control for date range
+        period_choice = st.segmented_control(
+            "Date Range",
+            options=period_labels,
+            default=current_label,
+            key="_date_filter_pills",
             label_visibility="collapsed",
         )
-        st.session_state.date_filter_period = period
+        if period_choice is None:
+            period_choice = "All Data"
+        st.session_state.date_filter_period = period_map.get(period_choice, "All Data")
 
-        start_date = data_min
-        end_date = data_max
-
-        if period == "Last 7 Days":
-            start_date = data_max - timedelta(days=6)
-        elif period == "Last 30 Days":
-            start_date = data_max - timedelta(days=29)
-        elif period == "Last 90 Days":
-            start_date = data_max - timedelta(days=89)
-        elif period == "Specific Month":
-            # Build month options from data
-            if 'year_month' in df.columns:
-                months = sorted(df['year_month'].unique(), reverse=True)
-            else:
-                months = sorted(all_dates.apply(lambda d: d.strftime('%Y-%m')).unique(), reverse=True)
-            selected_month = st.selectbox(
-                "Month",
-                options=months,
-                key="_date_filter_month",
-            )
-            # Parse selected month to date range
-            yr, mn = selected_month.split('-')
-            start_date = date(int(yr), int(mn), 1)
-            # Last day of month
-            if int(mn) == 12:
-                end_date = date(int(yr) + 1, 1, 1) - timedelta(days=1)
-            else:
-                end_date = date(int(yr), int(mn) + 1, 1) - timedelta(days=1)
-        elif period == "Custom Range":
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input(
-                    "From",
-                    value=data_min,
-                    min_value=data_min,
-                    max_value=data_max,
-                    key="_date_filter_start",
-                )
-            with col2:
-                end_date = st.date_input(
-                    "To",
-                    value=data_max,
-                    min_value=data_min,
-                    max_value=data_max,
-                    key="_date_filter_end",
-                )
-
-        # Clamp to data bounds
-        start_date = max(start_date, data_min)
-        end_date = min(end_date, data_max)
-
-        if period != "All Data":
-            st.caption(f"{start_date.strftime('%d %b %Y')} \u2014 {end_date.strftime('%d %b %Y')}")
-
-        st.divider()
-
-        # Load type filter (only for interval data with tariff_period)
-        if 'tariff_period' in df.columns:
-            st.markdown("### Load Type")
+    # Load type toggle chips
+    if has_tariff:
+        with col_load:
             available_periods = sorted(df['tariff_period'].unique())
-            selected_periods = st.multiselect(
-                "Tariff periods",
+            selected_periods = st.segmented_control(
+                "Load Type",
                 options=available_periods,
                 default=available_periods,
-                key="_load_type_filter",
+                selection_mode="multi",
+                key="_load_type_chips",
                 label_visibility="collapsed",
             )
-            st.divider()
+
+    # Compute date range from period choice
+    period = st.session_state.date_filter_period
+    start_date = data_min
+    end_date = data_max
+
+    if period == "Last 7 Days":
+        start_date = data_max - timedelta(days=6)
+    elif period == "Last 30 Days":
+        start_date = data_max - timedelta(days=29)
+    elif period == "Last 90 Days":
+        start_date = data_max - timedelta(days=89)
+    elif period == "Custom Range":
+        col1, col2, _ = st.columns([1, 1, 3])
+        with col1:
+            start_date = st.date_input(
+                "From",
+                value=data_min,
+                min_value=data_min,
+                max_value=data_max,
+                key="_date_filter_start",
+            )
+        with col2:
+            end_date = st.date_input(
+                "To",
+                value=data_max,
+                min_value=data_min,
+                max_value=data_max,
+                key="_date_filter_end",
+            )
+
+    # Clamp to data bounds
+    start_date = max(start_date, data_min)
+    end_date = min(end_date, data_max)
+
+    if period != "All Data":
+        st.caption(f"{start_date.strftime('%d %b %Y')} \u2014 {end_date.strftime('%d %b %Y')}")
 
     # Apply date filter
     filtered = df
@@ -202,7 +265,6 @@ def _render_date_filter_sidebar(df: pd.DataFrame):
         if selected_periods:
             filtered = filtered[filtered['tariff_period'].isin(selected_periods)].copy()
         else:
-            # User deselected everything — show empty df
             filtered = filtered.iloc[:0].copy()
 
     return filtered
@@ -242,11 +304,9 @@ def _handle_hdf_file(file_content: bytes, filename: str):
     result = st.session_state._hdf_cached_result
     full_df = result.df
 
-    # --- Sidebar: bill verification uploader ---
-    verification_result = _handle_verification_sidebar(full_df)
-
-    # Date range filter (sidebar)
-    df = _render_date_filter_sidebar(full_df)
+    # In-page tariff config and filter bar
+    _render_tariff_config()
+    df = _render_filter_bar(full_df)
 
     if len(df) == 0:
         st.warning("No data matches the current filters. Adjust the date range or load type above.")
@@ -259,25 +319,14 @@ def _handle_hdf_file(file_content: bytes, filename: str):
 
     st.success(f"\u2713 Showing {len(df):,} readings from {stats['start_date'].strftime('%d %b %Y')} to {stats['end_date'].strftime('%d %b %Y')}")
 
-    # Tabs for different sections — add Bill Verification if a bill is loaded
-    has_verification = verification_result is not None
-    if has_verification:
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "\U0001f4ca Overview",
-            "\U0001f525 Heatmap",
-            "\U0001f4c8 Charts",
-            "\u26a0\ufe0f Insights",
-            "\U0001f4e5 Export",
-            "\U0001f50d Bill Verification",
-        ])
-    else:
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "\U0001f4ca Overview",
-            "\U0001f525 Heatmap",
-            "\U0001f4c8 Charts",
-            "\u26a0\ufe0f Insights",
-            "\U0001f4e5 Export"
-        ])
+    # Standard analysis tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "\U0001f4ca Overview",
+        "\U0001f525 Heatmap",
+        "\U0001f4c8 Charts",
+        "\u26a0\ufe0f Insights",
+        "\U0001f4e5 Export"
+    ])
 
     with tab1:
         show_overview(stats, anomalies)
@@ -290,82 +339,221 @@ def _handle_hdf_file(file_content: bytes, filename: str):
     with tab5:
         show_export(df, stats)
 
-    if has_verification:
-        with tab6:
-            show_bill_verification(full_df, verification_result)
+    # --- Bill Verification section (main content, below tabs) ---
+    st.divider()
+    _render_bill_verification_section(full_df)
 
 
-def _handle_verification_sidebar(hdf_df: pd.DataFrame) -> VerificationResult | None:
-    """Render the bill verification uploader in the sidebar.
+def _get_extracted_bills_from_session() -> list[dict]:
+    """Get successfully extracted bills from the Bill Extractor page session state."""
+    bills = st.session_state.get("extracted_bills", [])
+    return [b for b in bills if b.get("status") == "success" and b.get("bill")]
 
-    Returns a VerificationResult if a valid bill has been uploaded and
-    cross-referenced, or None otherwise.
+
+def _render_bill_verification_section(hdf_df: pd.DataFrame):
+    """Render the bill verification section in the main content area.
+
+    Provides:
+    - Upload a new bill for verification
+    - Use an already-extracted bill from Bill Extractor page
+    - Graceful handling of missing MPRN (date-only matching)
+    - Manual date entry when bill has no billing period
+    - Color-coded pass/fail results
     """
     hdf_stats = get_summary_stats(hdf_df)
     hdf_mprn = hdf_stats.get('mprn', '')
+    hdf_start = hdf_stats.get('start_date')
+    hdf_end = hdf_stats.get('end_date')
 
-    with st.sidebar:
-        st.markdown("### \U0001f50d Verify a Bill")
-        st.caption("Upload a bill PDF to cross-check against this meter data.")
+    st.markdown("## Cross-Reference with a Bill")
+    st.caption(
+        "Upload a bill for this meter to verify charges against actual readings."
+    )
 
-        verification_pdf = st.file_uploader(
-            "Bill for verification",
-            type=['pdf', 'jpg', 'jpeg', 'png'],
-            key="verification_bill_uploader",
+    # --- Bill source selection ---
+    extracted_bills = _get_extracted_bills_from_session()
+    has_extracted = len(extracted_bills) > 0
+
+    if has_extracted:
+        source = st.radio(
+            "Bill source",
+            options=["Upload a new bill", "Use an already-extracted bill"],
+            horizontal=True,
+            key="_verification_source",
             label_visibility="collapsed",
         )
+    else:
+        source = "Upload a new bill"
 
-        if verification_pdf is None:
-            # Clear cached verification when file is removed
+    bill = None
+    v_key = None
+
+    if source == "Upload a new bill":
+        col_upload, _ = st.columns([2, 1])
+        with col_upload:
+            verification_file = st.file_uploader(
+                "Bill PDF or image",
+                type=['pdf', 'jpg', 'jpeg', 'png'],
+                key="verification_bill_uploader",
+                label_visibility="collapsed",
+            )
+
+        if verification_file is None:
             st.session_state.pop("_verification_result", None)
             st.session_state.pop("_verification_bill", None)
             st.session_state.pop("_verification_cache_key", None)
-            return None
+            return
 
-        # Cache to avoid re-extraction on every rerun
-        v_content = verification_pdf.getvalue()
-        v_key = f"verify_{verification_pdf.name}_{len(v_content)}"
+        v_content = verification_file.getvalue()
+        v_key = f"verify_{verification_file.name}_{len(v_content)}"
 
         if st.session_state.get("_verification_cache_key") != v_key:
             try:
                 with st.spinner("Extracting bill for verification..."):
-                    v_name = verification_pdf.name.lower()
+                    v_name = verification_file.name.lower()
                     if v_name.endswith(('.jpg', '.jpeg', '.png')):
                         pipeline_result = extract_bill_from_image(v_content)
                     else:
                         pipeline_result = extract_bill_pipeline(v_content)
                     bill = generic_to_legacy(pipeline_result.bill)
-
-                    # Validate cross-reference
-                    v_result = validate_cross_reference(hdf_df, hdf_mprn, bill)
-
-                    if v_result.valid:
-                        v_result = compute_verification(hdf_df, bill, v_result)
-
                     st.session_state._verification_cache_key = v_key
-                    st.session_state._verification_result = v_result
                     st.session_state._verification_bill = bill
+                    # Clear previous result so validation re-runs
+                    st.session_state.pop("_verification_result", None)
             except Exception as e:
                 st.error(f"Error extracting bill: {str(e)}")
-                return None
+                return
 
-        v_result = st.session_state.get("_verification_result")
         bill = st.session_state.get("_verification_bill")
 
-        if v_result and not v_result.valid:
-            st.error(v_result.block_reason)
-            return None
+    else:
+        # Use an already-extracted bill
+        bill_options = {
+            f"{b['supplier']} — {b['filename']}": b
+            for b in extracted_bills
+        }
+        selected_label = st.selectbox(
+            "Select a bill",
+            options=list(bill_options.keys()),
+            key="_verification_select_bill",
+        )
+        if selected_label:
+            selected = bill_options[selected_label]
+            bill = selected["bill"]
+            v_key = f"verify_extracted_{selected.get('content_hash', selected['filename'])}"
 
-        if v_result and v_result.valid:
-            st.success(
-                f"MPRN match: {v_result.hdf_mprn}\n\n"
-                f"Coverage: {v_result.overlap_pct:.0f}% "
-                f"({v_result.overlap_days}/{v_result.billing_days} days)"
-            )
+            if st.session_state.get("_verification_cache_key") != v_key:
+                st.session_state._verification_cache_key = v_key
+                st.session_state._verification_bill = bill
+                st.session_state.pop("_verification_result", None)
 
-        st.divider()
+            bill = st.session_state.get("_verification_bill")
 
-        return v_result
+    if bill is None:
+        return
+
+    # --- Validate and handle gracefully ---
+    # Check if we need manual dates
+    override_start = st.session_state.get("_verification_manual_start")
+    override_end = st.session_state.get("_verification_manual_end")
+
+    cached_result = st.session_state.get("_verification_result")
+
+    if cached_result is None:
+        v_result = validate_cross_reference(
+            hdf_df, hdf_mprn, bill,
+            override_start=override_start,
+            override_end=override_end,
+        )
+
+        if v_result.needs_manual_dates:
+            # Show date entry UI
+            st.warning("Billing period dates were not detected in this bill.")
+            if hdf_start and hdf_end:
+                st.caption(
+                    f"Meter data covers "
+                    f"{hdf_start.strftime('%d %b %Y')} — "
+                    f"{hdf_end.strftime('%d %b %Y')}. "
+                    f"Enter the billing period for this bill."
+                )
+
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col1:
+                manual_start = st.date_input(
+                    "Bill period start",
+                    value=hdf_start,
+                    min_value=hdf_start,
+                    max_value=hdf_end,
+                    key="_verification_date_start_input",
+                )
+            with col2:
+                manual_end = st.date_input(
+                    "Bill period end",
+                    value=hdf_end,
+                    min_value=hdf_start,
+                    max_value=hdf_end,
+                    key="_verification_date_end_input",
+                )
+            with col3:
+                st.markdown("")
+                st.markdown("")
+                if st.button("Verify with these dates", type="primary"):
+                    st.session_state._verification_manual_start = manual_start
+                    st.session_state._verification_manual_end = manual_end
+                    st.session_state.pop("_verification_result", None)
+                    st.rerun()
+            return
+
+        if v_result.valid:
+            v_result = compute_verification(hdf_df, bill, v_result)
+
+        st.session_state._verification_result = v_result
+
+    v_result = st.session_state._verification_result
+
+    if not v_result.valid:
+        st.error(v_result.block_reason)
+        return
+
+    # --- Pass/Fail Summary ---
+    _render_verification_summary(v_result)
+
+    # --- Detailed verification results ---
+    show_bill_verification(hdf_df, v_result)
+
+
+def _render_verification_summary(v: VerificationResult):
+    """Render a color-coded pass/fail summary for the verification."""
+    # Determine overall status based on consumption delta
+    if v.hdf_total_kwh and v.bill_total_kwh:
+        delta_pct = abs((v.bill_total_kwh - v.hdf_total_kwh) / v.hdf_total_kwh) * 100
+
+        if delta_pct <= 5:
+            color = "#22c55e"  # green
+            status = "Match"
+            message = "Billed consumption matches meter data within 5%."
+        elif delta_pct <= 15:
+            color = "#f59e0b"  # amber
+            status = "Review"
+            message = f"Billed consumption differs from meter data by {delta_pct:.0f}% — worth investigating."
+        else:
+            color = "#ef4444"  # red
+            status = "Discrepancy"
+            message = f"Billed consumption differs from meter data by {delta_pct:.0f}% — likely overcharge."
+
+        st.markdown(
+            f'<div style="padding: 1rem 1.5rem; border-left: 4px solid {color}; '
+            f'background: {color}15; border-radius: 0 8px 8px 0; margin: 1rem 0;">'
+            f'<div style="color: {color}; font-weight: 700; font-size: 1.1rem;">'
+            f'{status}</div>'
+            f'<div style="color: #e2e8f0; font-size: 0.95rem; margin-top: 0.3rem;">'
+            f'{message}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    # Show warnings
+    for issue in v.issues:
+        st.warning(issue)
 
 
 def _handle_excel_file(file_content: bytes, filename: str):
@@ -640,8 +828,9 @@ def _excel_step3_analysis():
     full_df = result.df
     granularity = result.granularity
 
-    # Date range filter (sidebar)
-    df = _render_date_filter_sidebar(full_df)
+    # In-page tariff config and filter bar
+    _render_tariff_config()
+    df = _render_filter_bar(full_df)
 
     if len(df) == 0:
         st.warning("No data matches the current filters. Adjust the date range or load type above.")
@@ -1286,19 +1475,16 @@ def show_export_flexible(df: pd.DataFrame, stats: dict, granularity: DataGranula
 # =========================================================================
 
 def show_bill_verification(hdf_df: pd.DataFrame, v: VerificationResult):
-    """Display the Bill Verification tab content."""
-    st.header("Bill Verification")
-    st.caption("Cross-referencing meter readings against billed amounts")
-
-    # --- Warnings ---
-    for issue in v.issues:
-        st.warning(issue)
+    """Display detailed bill verification results."""
 
     # --- 1. Match Status ---
     st.subheader("Match Status")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("MPRN", v.hdf_mprn)
+        if v.mprn_skipped:
+            st.metric("MPRN", "Skipped", help="Bill had no MPRN — matched by date only")
+        else:
+            st.metric("MPRN", v.hdf_mprn)
     with col2:
         st.metric("Data Coverage", f"{v.overlap_pct:.0f}%")
     with col3:
@@ -1670,6 +1856,17 @@ def generate_excel_export_flexible(
 # Sidebar & Main Flow
 # =========================================================================
 
+# Initialise session state for tariff (before sidebar so defaults are set)
+default_rates = PROVIDER_PRESETS['Electric Ireland']
+if 'tariff_provider' not in st.session_state:
+    st.session_state.tariff_provider = 'Electric Ireland'
+if '_tariff_day_widget' not in st.session_state:
+    st.session_state._tariff_day_widget = default_rates['day']
+if '_tariff_night_widget' not in st.session_state:
+    st.session_state._tariff_night_widget = default_rates['night']
+if '_tariff_peak_widget' not in st.session_state:
+    st.session_state._tariff_peak_widget = default_rates['peak']
+
 with st.sidebar:
     logo_path = _load_logo()
     if logo_path:
@@ -1680,88 +1877,10 @@ with st.sidebar:
     uploaded_file = st.file_uploader(
         "Energy Data File",
         type=['csv', 'xlsx', 'xls'],
-        help="Upload an ESB Networks HDF file (CSV) or Excel/CSV energy data",
+        help="Upload HDF, Excel, or CSV energy data (ESB Networks HDF 30-min CSV, .xlsx, .xls, .csv)",
         label_visibility="collapsed",
     )
-
-    st.divider()
-
-    st.markdown("### About")
-    st.markdown("""
-    Analyze energy consumption data:
-    - **ESB Networks HDF** (30-min CSV)
-    - **Excel spreadsheets** (.xlsx, .xls)
-    - **CSV files** with energy data
-    """)
-
-    st.divider()
-
-    # Initialise session state for tariff
-    default_rates = PROVIDER_PRESETS['Electric Ireland']
-    if 'tariff_provider' not in st.session_state:
-        st.session_state.tariff_provider = 'Electric Ireland'
-    if '_tariff_day_widget' not in st.session_state:
-        st.session_state._tariff_day_widget = default_rates['day']
-    if '_tariff_night_widget' not in st.session_state:
-        st.session_state._tariff_night_widget = default_rates['night']
-    if '_tariff_peak_widget' not in st.session_state:
-        st.session_state._tariff_peak_widget = default_rates['peak']
-
-    # Tariff rate inputs
-    st.markdown("### Tariff Rates")
-
-    provider_names = list(PROVIDER_PRESETS.keys())
-
-    def _on_provider_change():
-        """Callback: update rate widget keys when provider changes."""
-        provider = st.session_state._tariff_provider_widget
-        if provider != 'Custom':
-            preset = PROVIDER_PRESETS[provider]
-            st.session_state._tariff_day_widget = preset['day']
-            st.session_state._tariff_night_widget = preset['night']
-            st.session_state._tariff_peak_widget = preset['peak']
-        st.session_state.tariff_provider = provider
-
-    def _on_rate_change():
-        """Callback: switch to Custom when user manually edits a rate."""
-        if st.session_state.tariff_provider != 'Custom':
-            current_preset = PROVIDER_PRESETS.get(st.session_state.tariff_provider, {})
-            if (abs(st.session_state._tariff_day_widget - current_preset.get('day', 0)) > 0.001 or
-                abs(st.session_state._tariff_night_widget - current_preset.get('night', 0)) > 0.001 or
-                abs(st.session_state._tariff_peak_widget - current_preset.get('peak', 0)) > 0.001):
-                st.session_state.tariff_provider = 'Custom'
-
-    provider = st.selectbox(
-        "Electricity Provider",
-        options=provider_names,
-        index=provider_names.index(st.session_state.tariff_provider),
-        key='_tariff_provider_widget',
-        on_change=_on_provider_change,
-    )
-
-    st.number_input(
-        "Day rate (c/kWh)",
-        min_value=0.0, max_value=100.0,
-        step=0.5, format="%.2f",
-        key='_tariff_day_widget',
-        on_change=_on_rate_change,
-    )
-    st.number_input(
-        "Night rate (c/kWh)",
-        min_value=0.0, max_value=100.0,
-        step=0.5, format="%.2f",
-        key='_tariff_night_widget',
-        on_change=_on_rate_change,
-    )
-    st.number_input(
-        "Peak rate (c/kWh)",
-        min_value=0.0, max_value=100.0,
-        step=0.5, format="%.2f",
-        key='_tariff_peak_widget',
-        on_change=_on_rate_change,
-    )
-
-    st.caption("Rates inc. VAT. Verify against client's bill.")
+    st.caption("Upload HDF, Excel, or CSV")
 
 
 # --- Main content ---
@@ -1787,23 +1906,23 @@ if file_content is not None and filename is not None:
     else:
         _handle_excel_file(file_content, filename)
 else:
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("---")
-        st.markdown("### Upload Energy Data")
-        st.markdown(
-            "Use the sidebar to upload a CSV or Excel file "
-            "containing energy consumption data."
-        )
-        st.markdown("")
-        st.markdown("**Supported formats:**")
-        st.markdown("- ESB Networks HDF (30-min CSV)")
-        st.markdown("- Excel spreadsheets (.xlsx, .xls)")
-        st.markdown("- CSV files with energy data")
-        st.markdown("")
-        st.markdown("**What you'll get:**")
-        st.markdown("- Overview metrics (consumption, baseload, peak)")
-        st.markdown("- Usage heatmap by hour and day")
-        st.markdown("- Trend charts and anomaly detection")
-        st.markdown("- Excel export for energy audits")
-        st.markdown("---")
+    # Empty state — polished card
+    st.markdown(
+        """
+        <div class="empty-state-card">
+            <div class="empty-icon">\U0001f4ca</div>
+            <h3>Upload Energy Data</h3>
+            <p>
+                Use the sidebar to upload an ESB Networks HDF file,<br>
+                Excel spreadsheet, or CSV with energy data.
+            </p>
+            <div class="format-tags">
+                <span class="format-tag">HDF CSV</span>
+                <span class="format-tag">XLSX</span>
+                <span class="format-tag">XLS</span>
+                <span class="format-tag">CSV</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )

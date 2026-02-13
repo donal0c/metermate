@@ -46,6 +46,9 @@ if "extracted_bills" not in st.session_state:
 if "processed_hashes" not in st.session_state:
     st.session_state.processed_hashes = set()
 
+if "bill_edits" not in st.session_state:
+    st.session_state.bill_edits = {}
+
 
 # =========================================================================
 # Functions
@@ -105,6 +108,38 @@ def _count_extracted_fields(bill: BillData) -> int:
     )
 
 
+def _confidence_level(pct: int):
+    """Return (level, color, bg, label, suggestion) for a confidence percentage."""
+    if pct >= 80:
+        return ("high", "#22c55e", "rgba(34,197,94,0.1)",
+                "High confidence", None)
+    elif pct >= 60:
+        return ("partial", "#f59e0b", "rgba(245,158,11,0.1)",
+                "Partial extraction",
+                "Review highlighted values against the original bill.")
+    else:
+        return ("low", "#ef4444", "rgba(239,68,68,0.1)",
+                "Low confidence",
+                "Consider uploading a clearer scan or the PDF version if available.")
+
+
+def _get_edit(key_suffix: str, field_name: str):
+    """Retrieve an edited value from session state, or None if not edited."""
+    return st.session_state.bill_edits.get(f"{key_suffix}_{field_name}")
+
+
+def _display_value(bill, field_name: str, key_suffix: str, format_fn=None):
+    """Return (display_value, is_edited, original) for a field, checking edits."""
+    original = getattr(bill, field_name, None)
+    edited_val = _get_edit(key_suffix, field_name)
+    if edited_val is not None:
+        display = format_fn(edited_val) if format_fn else edited_val
+        orig_str = format_fn(original) if format_fn and original is not None else str(original)
+        return display, True, orig_str
+    display = format_fn(original) if format_fn and original is not None else original
+    return display, False, None
+
+
 def show_bill_summary(bill: BillData, raw_text: str | None = None,
                       key_suffix: str = ""):
     """Display extracted bill data as a clean single-page summary.
@@ -116,7 +151,7 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
             rendering multiple summaries on the same page.
     """
 
-    # --- Header with per-section breakdown ---
+    # --- Traffic Light Confidence Badge ---
     confidence_pct = round(bill.confidence_score * 100)
     supplier_label = bill.supplier or "Unknown supplier"
 
@@ -152,31 +187,51 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
             if field_match:
                 warn_fields.add(field_match)
 
-    if confidence_pct >= 80:
-        st.success(
-            f"**{supplier_label}** \u2014 {total_extracted}/{total_expected} fields "
-            f"(confidence: {confidence_pct}%)\n\n"
-            f"{section_summary}"
-        )
-    else:
-        verify_note = (
-            "Fields marked with \u26a0\ufe0f could not be extracted \u2014 please verify manually."
-            if warn_fields
-            else "Low extraction confidence \u2014 please verify key fields against the original bill."
-        )
-        st.warning(
-            f"**{supplier_label}** \u2014 {total_extracted}/{total_expected} fields "
-            f"(confidence: {confidence_pct}%)\n\n"
-            f"{section_summary}\n\n"
-            f"{verify_note}"
+    level, color, bg, level_label, suggestion = _confidence_level(confidence_pct)
+
+    badge_html = (
+        f'<div data-testid="confidence-badge" data-level="{level}" '
+        f'style="display: flex; align-items: center; gap: 0.75rem; '
+        f'padding: 0.6rem 1rem; background: {bg}; border: 1px solid {color}30; '
+        f'border-radius: 8px; margin-bottom: 0.5rem;">'
+        f'<span style="width: 12px; height: 12px; border-radius: 50%; '
+        f'background: {color}; flex-shrink: 0;"></span>'
+        f'<div>'
+        f'<span style="color: {color}; font-weight: 600;">{level_label}</span>'
+        f'<span style="color: #94a3b8; margin-left: 0.5rem;">'
+        f'\u2014 {total_extracted}/{total_expected} fields extracted</span>'
+        f'<br><span style="color: #e2e8f0; font-weight: 500;">{supplier_label}</span>'
+        f'</div></div>'
+    )
+    st.markdown(badge_html, unsafe_allow_html=True)
+
+    # Section breakdown (muted detail)
+    st.caption(section_summary)
+
+    # Actionable suggestion for partial/low confidence
+    if suggestion:
+        st.markdown(
+            f'<div data-testid="confidence-suggestion" '
+            f'style="padding: 0.5rem 0.8rem; border-left: 3px solid {color}; '
+            f'background: #1e2433; border-radius: 0 4px 4px 0; margin-bottom: 0.8rem; '
+            f'color: #e2e8f0; font-size: 0.85rem;">{suggestion}</div>',
+            unsafe_allow_html=True,
         )
 
-    # --- Extraction Method Info (for debugging/transparency) ---
-    if bill.extraction_method:
+    # --- Very low confidence: show extraction-failed card ---
+    if confidence_pct < 40:
         st.markdown(
-            f'<div style="padding: 0.4rem 0.8rem; background: #1e293b; border-radius: 4px; '
-            f'margin-bottom: 0.8rem; color: #94a3b8; font-size: 0.8rem;">'
-            f'<strong>Extraction path:</strong> {bill.extraction_method}</div>',
+            '<div class="extraction-failed-card">'
+            '<h4>Extraction largely failed</h4>'
+            '<p style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.75rem;">'
+            'Most fields could not be extracted from this bill.</p>'
+            '<p style="color: #cbd5e1; font-size: 0.85rem; font-weight: 600; '
+            'margin-bottom: 0.25rem;">Try:</p>'
+            '<ol class="suggestion-list">'
+            '<li>Upload a clearer scan or the original PDF version</li>'
+            '<li>Check the file is not password-protected or corrupted</li>'
+            '<li>Use the edit form below to enter values manually</li>'
+            '</ol></div>',
             unsafe_allow_html=True,
         )
 
@@ -194,17 +249,20 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
     st.subheader("\U0001f3e2 Account Details")
     cols = st.columns(4)
     account_fields = [
-        ("Supplier", bill.supplier, 'supplier'),
-        ("Customer", bill.customer_name, 'customer_name'),
-        ("MPRN", bill.mprn, 'mprn'),
-        ("Account No.", bill.account_number, 'account_number'),
-        ("Meter No.", bill.meter_number, 'meter_number'),
-        ("Invoice No.", bill.invoice_number, 'invoice_number'),
+        ("Supplier", 'supplier'),
+        ("Customer", 'customer_name'),
+        ("MPRN", 'mprn'),
+        ("Account No.", 'account_number'),
+        ("Meter No.", 'meter_number'),
+        ("Invoice No.", 'invoice_number'),
     ]
-    for i, (label, value, field_name) in enumerate(account_fields):
+    for i, (label, field_name) in enumerate(account_fields):
         with cols[i % 4]:
+            display, is_edited, orig = _display_value(bill, field_name, key_suffix)
             st.markdown(
-                field_html(label, value, warn=field_name in warn_fields),
+                field_html(label, display,
+                           warn=field_name in warn_fields and not is_edited,
+                           edited=is_edited, original=orig),
                 unsafe_allow_html=True,
             )
 
@@ -244,42 +302,57 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
         st.subheader("\u26a1 Consumption")
         cols = st.columns(4)
         consumption_fields = [
-            ("Day Units", bill.day_units_kwh, "kWh"),
-            ("Night Units", bill.night_units_kwh, "kWh"),
-            ("Peak Units", bill.peak_units_kwh, "kWh"),
-            ("Total Units", bill.total_units_kwh, "kWh"),
+            ("Day Units", "day_units_kwh", "kWh"),
+            ("Night Units", "night_units_kwh", "kWh"),
+            ("Peak Units", "peak_units_kwh", "kWh"),
+            ("Total Units", "total_units_kwh", "kWh"),
         ]
-        for i, (label, value, unit) in enumerate(consumption_fields):
+        for i, (label, fname, unit) in enumerate(consumption_fields):
             with cols[i]:
-                display = fmt_value(value, suffix=f" {unit}", fmt_spec=",.1f") if value is not None else None
-                st.markdown(field_html(label, display), unsafe_allow_html=True)
+                def _fmt_kwh(v, u=unit):
+                    return fmt_value(v, suffix=f" {u}", fmt_spec=",.1f")
+                display, is_edited, orig = _display_value(bill, fname, key_suffix, format_fn=_fmt_kwh)
+                st.markdown(
+                    field_html(label, display, edited=is_edited, original=orig),
+                    unsafe_allow_html=True,
+                )
 
         # Rates row
         if any(v is not None for v in [bill.day_rate, bill.night_rate, bill.peak_rate]):
             cols = st.columns(4)
             rate_fields = [
-                ("Day Rate", bill.day_rate),
-                ("Night Rate", bill.night_rate),
-                ("Peak Rate", bill.peak_rate),
+                ("Day Rate", "day_rate"),
+                ("Night Rate", "night_rate"),
+                ("Peak Rate", "peak_rate"),
             ]
-            for i, (label, value) in enumerate(rate_fields):
+            for i, (label, fname) in enumerate(rate_fields):
                 with cols[i]:
-                    display = f"\u20ac{value:.4f}/kWh" if value is not None else None
-                    st.markdown(field_html(label, display), unsafe_allow_html=True)
+                    def _fmt_rate(v):
+                        return f"\u20ac{v:.4f}/kWh" if v is not None else None
+                    display, is_edited, orig = _display_value(bill, fname, key_suffix, format_fn=_fmt_rate)
+                    st.markdown(
+                        field_html(label, display, edited=is_edited, original=orig),
+                        unsafe_allow_html=True,
+                    )
 
     # --- Section 4: Costs ---
     st.subheader("\U0001f4b0 Costs")
     cols = st.columns(4)
-    cost_fields = [
-        ("Day Cost", bill.day_cost),
-        ("Night Cost", bill.night_cost),
-        ("Peak Cost", bill.peak_cost),
-        ("Subtotal", bill.subtotal_before_vat),
+    cost_field_names = [
+        ("Day Cost", "day_cost"),
+        ("Night Cost", "night_cost"),
+        ("Peak Cost", "peak_cost"),
+        ("Subtotal", "subtotal_before_vat"),
     ]
-    for i, (label, value) in enumerate(cost_fields):
+    for i, (label, fname) in enumerate(cost_field_names):
         with cols[i]:
-            display = f"\u20ac{value:,.2f}" if value is not None else None
-            st.markdown(field_html(label, display), unsafe_allow_html=True)
+            def _fmt_eur(v):
+                return f"\u20ac{v:,.2f}" if v is not None else None
+            display, is_edited, orig = _display_value(bill, fname, key_suffix, format_fn=_fmt_eur)
+            st.markdown(
+                field_html(label, display, edited=is_edited, original=orig),
+                unsafe_allow_html=True,
+            )
 
     # Additional cost line items
     line_items = []
@@ -352,6 +425,107 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
             else:
                 st.markdown(field_html("Amount Due", None), unsafe_allow_html=True)
 
+    # --- Inline Editing ---
+    st.divider()
+    with st.expander("\u270f\ufe0f Edit Extracted Values", expanded=False):
+        st.caption(
+            "Correct any misidentified values. Edits are marked blue and "
+            "included in exports."
+        )
+        with st.form(key=f"edit_form{key_suffix}"):
+            col1, col2 = st.columns(2)
+            _edits = st.session_state.bill_edits
+
+            with col1:
+                st.markdown("**Identity & Dates**")
+                ef_supplier = st.text_input(
+                    "Supplier",
+                    value=_edits.get(f"{key_suffix}_supplier", bill.supplier or ""),
+                    key=f"ef_supplier{key_suffix}",
+                )
+                ef_mprn = st.text_input(
+                    "MPRN",
+                    value=_edits.get(f"{key_suffix}_mprn", bill.mprn or ""),
+                    key=f"ef_mprn{key_suffix}",
+                )
+                ef_bill_date = st.text_input(
+                    "Bill Date",
+                    value=_edits.get(f"{key_suffix}_bill_date", bill.bill_date or ""),
+                    key=f"ef_bill_date{key_suffix}",
+                )
+                ef_period_start = st.text_input(
+                    "Period Start",
+                    value=_edits.get(f"{key_suffix}_billing_period_start",
+                                     bill.billing_period_start or ""),
+                    key=f"ef_period_start{key_suffix}",
+                )
+                ef_period_end = st.text_input(
+                    "Period End",
+                    value=_edits.get(f"{key_suffix}_billing_period_end",
+                                     bill.billing_period_end or ""),
+                    key=f"ef_period_end{key_suffix}",
+                )
+
+            with col2:
+                st.markdown("**Consumption & Costs**")
+                ef_day_rate = st.text_input(
+                    "Day Rate (\u20ac/kWh)",
+                    value=str(_edits.get(f"{key_suffix}_day_rate",
+                                          bill.day_rate or "")),
+                    key=f"ef_day_rate{key_suffix}",
+                )
+                ef_night_rate = st.text_input(
+                    "Night Rate (\u20ac/kWh)",
+                    value=str(_edits.get(f"{key_suffix}_night_rate",
+                                          bill.night_rate or "")),
+                    key=f"ef_night_rate{key_suffix}",
+                )
+                ef_standing = st.text_input(
+                    "Standing Charge (\u20ac)",
+                    value=str(_edits.get(f"{key_suffix}_standing_charge_total",
+                                          bill.standing_charge_total or "")),
+                    key=f"ef_standing{key_suffix}",
+                )
+                ef_total_cost = st.text_input(
+                    "Total Cost (\u20ac)",
+                    value=str(_edits.get(f"{key_suffix}_total_this_period",
+                                          bill.total_this_period or "")),
+                    key=f"ef_total_cost{key_suffix}",
+                )
+                ef_amount_due = st.text_input(
+                    "Amount Due (\u20ac)",
+                    value=str(_edits.get(f"{key_suffix}_amount_due",
+                                          bill.amount_due or "")),
+                    key=f"ef_amount_due{key_suffix}",
+                )
+
+            submitted = st.form_submit_button("Save Changes", type="primary")
+            if submitted:
+                _edit_map = {
+                    f"{key_suffix}_supplier": (ef_supplier, bill.supplier),
+                    f"{key_suffix}_mprn": (ef_mprn, bill.mprn),
+                    f"{key_suffix}_bill_date": (ef_bill_date, bill.bill_date),
+                    f"{key_suffix}_billing_period_start": (ef_period_start, bill.billing_period_start),
+                    f"{key_suffix}_billing_period_end": (ef_period_end, bill.billing_period_end),
+                    f"{key_suffix}_day_rate": (ef_day_rate, bill.day_rate),
+                    f"{key_suffix}_night_rate": (ef_night_rate, bill.night_rate),
+                    f"{key_suffix}_standing_charge_total": (ef_standing, bill.standing_charge_total),
+                    f"{key_suffix}_total_this_period": (ef_total_cost, bill.total_this_period),
+                    f"{key_suffix}_amount_due": (ef_amount_due, bill.amount_due),
+                }
+                for edit_key, (new_val, orig_val) in _edit_map.items():
+                    new_str = str(new_val).strip()
+                    orig_str = str(orig_val or "").strip()
+                    if new_str and new_str != orig_str:
+                        # Try numeric conversion for cost/rate fields
+                        try:
+                            st.session_state.bill_edits[edit_key] = float(new_str)
+                        except ValueError:
+                            st.session_state.bill_edits[edit_key] = new_str
+                    elif not new_str and edit_key in st.session_state.bill_edits:
+                        del st.session_state.bill_edits[edit_key]
+                st.rerun()
+
     # --- Export ---
     st.divider()
     st.subheader("\U0001f4e5 Export")
@@ -365,10 +539,7 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"bill_download{key_suffix}",
     )
-    st.caption(
-        f"Extraction method: {bill.extraction_method} \u00b7 "
-        f"Confidence: {confidence_pct}%"
-    )
+    st.caption(f"Confidence: {confidence_pct}%")
 
     # --- Raw Text Debug (collapsed by default) ---
     if raw_text:
@@ -562,46 +733,67 @@ def _comparison_summary(df: pd.DataFrame):
 
     # Key metrics
     col1, col2, col3, col4 = st.columns(4)
+    valid_costs = df['total_cost'].dropna()
+    valid_kwh = df['total_kwh'].dropna()
+    total_bills = len(df)
+    cost_count = len(valid_costs)
+    kwh_count = len(valid_kwh)
+
     with col1:
-        total_cost = df['total_cost'].sum()
+        total_cost = valid_costs.sum() if cost_count > 0 else 0
+        cost_label = "Total Cost"
+        if cost_count < total_bills:
+            cost_label = f"Total Cost ({cost_count}/{total_bills} bills)"
         st.metric(
-            "Total Cost",
-            f"\u20ac{total_cost:,.2f}" if pd.notna(total_cost) and total_cost > 0 else "\u2014",
+            cost_label,
+            f"\u20ac{total_cost:,.2f}" if total_cost > 0 else "\u2014",
         )
     with col2:
-        total_kwh = df['total_kwh'].sum()
+        total_kwh = valid_kwh.sum() if kwh_count > 0 else 0
+        kwh_label = "Total kWh"
+        if kwh_count < total_bills:
+            kwh_label = f"Total kWh ({kwh_count}/{total_bills} bills)"
         st.metric(
-            "Total kWh",
-            f"{total_kwh:,.0f}" if pd.notna(total_kwh) and total_kwh > 0 else "\u2014",
+            kwh_label,
+            f"{total_kwh:,.0f}" if total_kwh > 0 else "\u2014",
         )
     with col3:
-        valid_costs = df['total_cost'].dropna()
-        total_bills = len(df)
-        valid_count = len(valid_costs)
-        avg_cost = valid_costs.mean() if valid_count > 0 else None
+        avg_cost = valid_costs.mean() if cost_count > 0 else None
         label = "Avg Cost/Bill"
-        if valid_count < total_bills and valid_count > 0:
-            label = f"Avg Cost/Bill ({valid_count} of {total_bills})"
+        if cost_count < total_bills and cost_count > 0:
+            label = f"Avg Cost/Bill ({cost_count} of {total_bills})"
         st.metric(
             label,
             f"\u20ac{avg_cost:,.2f}" if avg_cost else "\u2014",
         )
     with col4:
-        if (
-            df['total_kwh'].notna().any()
-            and df['total_cost'].notna().any()
-            and df['total_kwh'].sum() > 0
-        ):
-            avg_rate = df['total_cost'].sum() / df['total_kwh'].sum()
+        if total_kwh > 0 and total_cost > 0:
+            avg_rate = total_cost / total_kwh
             st.metric("Avg \u20ac/kWh", f"\u20ac{avg_rate:.4f}")
         else:
             st.metric("Avg \u20ac/kWh", "\u2014")
 
+    # Exclusion note
+    excluded = total_bills - cost_count
+    if excluded > 0:
+        st.caption(
+            f"{excluded} bill{'s' if excluded != 1 else ''} excluded from "
+            f"cost aggregates (incomplete extraction)."
+        )
+
     st.divider()
+
+    # Add traffic-light confidence level to DataFrame
+    def _conf_label(score):
+        pct = round(score * 100)
+        level, color, _, label, _ = _confidence_level(pct)
+        return f"{label} ({pct}%)"
+
+    df_display = df.copy()
+    df_display['conf_label'] = df_display['confidence'].apply(_conf_label)
 
     # Display table
     display_cols = {
-        'filename': 'File',
         'supplier': 'Supplier',
         'billing_period': 'Period',
         'total_kwh': 'Total kWh',
@@ -610,29 +802,31 @@ def _comparison_summary(df: pd.DataFrame):
         'night_kwh': 'Night kWh',
         'standing_charge': 'Standing (\u20ac)',
         'vat': 'VAT (\u20ac)',
-        'confidence': 'Confidence',
+        'conf_label': 'Confidence',
     }
 
-    available_cols = [c for c in display_cols if c in df.columns]
-    display_df = df[available_cols].rename(
+    available_cols = [c for c in display_cols if c in df_display.columns]
+    display_df = df_display[available_cols].rename(
         columns={k: v for k, v in display_cols.items() if k in available_cols}
     )
+
+    # Replace NaN/None with dash for display
+    display_df = display_df.fillna("\u2014")
 
     st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True,
         column_config={
-            'File': st.column_config.TextColumn(width="small"),
             'Supplier': st.column_config.TextColumn(width="small"),
             'Period': st.column_config.TextColumn(width="medium"),
-            'Total kWh': st.column_config.NumberColumn(format="%.1f", width="small"),
-            'Total (\u20ac)': st.column_config.NumberColumn(format="\u20ac%.2f", width="small"),
-            'Day kWh': st.column_config.NumberColumn(format="%.1f", width="small"),
-            'Night kWh': st.column_config.NumberColumn(format="%.1f", width="small"),
-            'Standing (\u20ac)': st.column_config.NumberColumn(format="\u20ac%.2f", width="small"),
-            'VAT (\u20ac)': st.column_config.NumberColumn(format="\u20ac%.2f", width="small"),
-            'Confidence': st.column_config.NumberColumn(format="%.0%%", width="small"),
+            'Total kWh': st.column_config.TextColumn(width="small"),
+            'Total (\u20ac)': st.column_config.TextColumn(width="small"),
+            'Day kWh': st.column_config.TextColumn(width="small"),
+            'Night kWh': st.column_config.TextColumn(width="small"),
+            'Standing (\u20ac)': st.column_config.TextColumn(width="small"),
+            'VAT (\u20ac)': st.column_config.TextColumn(width="small"),
+            'Confidence': st.column_config.TextColumn(width="medium"),
         },
     )
 
@@ -1014,16 +1208,26 @@ if uploaded_files:
             new_files.append((file_content, f.name, file_hash))
 
     if new_files:
-        progress = st.progress(0, text="Processing bills...")
-        for i, (file_content, filename, file_hash) in enumerate(new_files):
-            progress.progress(
-                (i + 1) / len(new_files),
-                text=f"Extracting {filename}...",
+        total = len(new_files)
+        with st.status(
+            f"Processing {total} bill{'s' if total > 1 else ''}...",
+            expanded=True,
+        ) as status:
+            for i, (file_content, filename, file_hash) in enumerate(new_files):
+                st.write(f"Extracting **{filename}** ({i + 1}/{total})")
+                result = _extract_bill(file_content, filename)
+                st.session_state.extracted_bills.append(result)
+                st.session_state.processed_hashes.add(file_hash)
+                if result["status"] == "success":
+                    supplier = result["supplier"] or "Unknown"
+                    conf = round(result["confidence"] * 100)
+                    st.write(f"  {supplier} \u2014 {conf}% confidence")
+                else:
+                    st.write(f"  Failed: {result['error']}")
+            status.update(
+                label=f"Extracted {total} bill{'s' if total > 1 else ''}",
+                state="complete",
             )
-            result = _extract_bill(file_content, filename)
-            st.session_state.extracted_bills.append(result)
-            st.session_state.processed_hashes.add(file_hash)
-        progress.empty()
         st.rerun()
 
 # --- Status chips for processed bills ---
@@ -1076,9 +1280,37 @@ successful_bills = [
 ]
 error_bills = [b for b in bills if b["status"] == "error"]
 
-# Show errors
+# Show errors with actionable guidance
 for entry in error_bills:
-    st.warning(f"Failed to extract **{entry['filename']}**: {entry['error']}")
+    fname = entry["filename"]
+    is_image = fname.lower().endswith(('.jpg', '.jpeg', '.png'))
+    if is_image:
+        suggestions = (
+            '<ol class="suggestion-list">'
+            '<li>Ensure the photo has good lighting and is in focus</li>'
+            '<li>Flatten the bill before photographing (avoid creases)</li>'
+            '<li>Use the PDF version of the bill if available</li>'
+            '</ol>'
+        )
+    else:
+        suggestions = (
+            '<ol class="suggestion-list">'
+            '<li>Check the file is not password-protected</li>'
+            '<li>Ensure it is a valid electricity bill PDF</li>'
+            '<li>If scanned, ensure the text is legible</li>'
+            '</ol>'
+        )
+    st.markdown(
+        f'<div class="extraction-failed-card">'
+        f'<h4>Could not extract {fname}</h4>'
+        f'<p style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.75rem;">'
+        f'{entry["error"]}</p>'
+        f'<p style="color: #cbd5e1; font-size: 0.85rem; font-weight: 600; '
+        f'margin-bottom: 0.25rem;">Suggestions:</p>'
+        f'{suggestions}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 if len(successful_bills) == 1:
     # Single bill detail view
@@ -1107,24 +1339,23 @@ elif len(successful_bills) >= 2:
             show_bill_summary(bill, raw_text=raw_text, key_suffix=f"_{idx}")
 
 else:
-    # Empty state — no bills yet
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("---")
-        st.markdown("### Upload Electricity Bills")
-        st.markdown(
-            "Upload one or more bills (PDF or photo) above to extract "
-            "costs, consumption, and rates. Upload more at any time to compare."
-        )
-        st.markdown("")
-        st.markdown("**Supported formats:**")
-        st.markdown("- PDF bills (digital or scanned)")
-        st.markdown("- Photographed bills (JPG, PNG)")
-        st.markdown("")
-        st.markdown("**What you'll get:**")
-        st.markdown("- Supplier, account, and MPRN details")
-        st.markdown("- Consumption breakdown (day/night/peak)")
-        st.markdown("- Cost summary and balance")
-        st.markdown("- Multi-bill comparison (2+ bills)")
-        st.markdown("- Excel export")
-        st.markdown("---")
+    # Empty state — polished card
+    st.markdown(
+        """
+        <div class="empty-state-card">
+            <div class="empty-icon">\U0001f4c4</div>
+            <h3>Upload Electricity Bills</h3>
+            <p>
+                Drag and drop PDF or photographed bills above.<br>
+                Upload more at any time to compare across periods.
+            </p>
+            <div class="format-tags">
+                <span class="format-tag">PDF</span>
+                <span class="format-tag">JPG</span>
+                <span class="format-tag">PNG</span>
+                <span class="format-tag">Scanned</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )

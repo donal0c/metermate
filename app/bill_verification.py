@@ -53,6 +53,7 @@ class VerificationResult:
     hdf_mprn: str = ""
     bill_mprn: str = ""
     mprn_match: bool = False
+    mprn_skipped: bool = False  # True when bill had no MPRN
 
     # Date overlap
     bill_start: Optional[date] = None
@@ -62,6 +63,7 @@ class VerificationResult:
     overlap_days: int = 0
     billing_days: int = 0
     overlap_pct: float = 0.0
+    needs_manual_dates: bool = False  # True when bill has no billing period
 
     # Issues / warnings
     issues: list[str] = field(default_factory=list)
@@ -104,39 +106,54 @@ def validate_cross_reference(
     hdf_df: pd.DataFrame,
     hdf_mprn: str,
     bill: BillData,
+    *,
+    override_start: date | None = None,
+    override_end: date | None = None,
 ) -> VerificationResult:
     """Validate that HDF data and bill can be cross-referenced.
 
     Checks MPRN match and date overlap. Does NOT compute consumption
     comparisons — that's done by compute_verification() after validation.
+
+    Gracefully handles missing data:
+    - Missing MPRN: skips MPRN matching, proceeds with date-based matching
+    - Missing billing period: signals needs_manual_dates for UI to collect
+    - override_start/override_end: manually entered dates (when bill has none)
     """
     result = VerificationResult()
     result.hdf_mprn = hdf_mprn
 
-    # --- MPRN check ---
+    # --- MPRN check (graceful) ---
     result.bill_mprn = bill.mprn or ""
     if not bill.mprn:
-        result.valid = False
-        result.block_reason = "Bill has no MPRN — cannot verify against meter data."
-        return result
-
-    result.mprn_match = result.hdf_mprn.strip() == result.bill_mprn.strip()
-    if not result.mprn_match:
-        result.valid = False
-        result.block_reason = (
-            f"Bill MPRN ({result.bill_mprn}) does not match "
-            f"meter data MPRN ({result.hdf_mprn}). "
-            f"Cannot compare data from different meters."
+        result.mprn_skipped = True
+        result.issues.append(
+            "Bill MPRN not detected. Matching by date range only."
         )
-        return result
+    elif hdf_mprn:
+        result.mprn_match = result.hdf_mprn.strip() == result.bill_mprn.strip()
+        if not result.mprn_match:
+            result.valid = False
+            result.block_reason = (
+                f"Bill MPRN ({result.bill_mprn}) does not match "
+                f"meter data MPRN ({result.hdf_mprn}). "
+                f"Cannot compare data from different meters."
+            )
+            return result
 
     # --- Date overlap check ---
-    result.bill_start = parse_bill_date(bill.billing_period_start)
-    result.bill_end = parse_bill_date(bill.billing_period_end)
+    result.bill_start = override_start or parse_bill_date(bill.billing_period_start)
+    result.bill_end = override_end or parse_bill_date(bill.billing_period_end)
 
     if not result.bill_start or not result.bill_end:
+        # Signal that the UI should prompt for manual dates
+        result.needs_manual_dates = True
         result.valid = False
-        result.block_reason = "Bill has no billing period dates — cannot filter meter data."
+        # Populate hdf date range so UI can show it
+        if 'datetime' in hdf_df.columns:
+            result.hdf_start = hdf_df['datetime'].min().date()
+            result.hdf_end = hdf_df['datetime'].max().date()
+        result.block_reason = "Bill has no billing period dates."
         return result
 
     # HDF date range
@@ -145,7 +162,7 @@ def validate_cross_reference(
         result.hdf_end = hdf_df['datetime'].max().date()
     else:
         result.valid = False
-        result.block_reason = "HDF data has no datetime column."
+        result.block_reason = "Meter data has no datetime column."
         return result
 
     result.billing_days = (result.bill_end - result.bill_start).days
@@ -163,10 +180,11 @@ def validate_cross_reference(
     if result.overlap_days == 0:
         result.valid = False
         result.block_reason = (
-            f"Bill period ({result.bill_start.strftime('%d %b %Y')} — "
-            f"{result.bill_end.strftime('%d %b %Y')}) falls outside "
-            f"HDF data range ({result.hdf_start.strftime('%d %b %Y')} — "
-            f"{result.hdf_end.strftime('%d %b %Y')})."
+            f"This bill's period ({result.bill_start.strftime('%d %b %Y')} — "
+            f"{result.bill_end.strftime('%d %b %Y')}) doesn't overlap with "
+            f"meter data ({result.hdf_start.strftime('%d %b %Y')} — "
+            f"{result.hdf_end.strftime('%d %b %Y')}). "
+            f"Upload a bill from the meter data period."
         )
         return result
 
@@ -179,8 +197,10 @@ def validate_cross_reference(
 
     if result.overlap_pct < 100:
         result.issues.append(
-            f"Meter data covers {result.overlap_pct:.0f}% of the billing period "
-            f"({result.overlap_days}/{result.billing_days} days)."
+            f"Bill covers {result.bill_start.strftime('%d %b')} — "
+            f"{result.bill_end.strftime('%d %b')}. "
+            f"Meter data available for {result.overlap_days} of "
+            f"{result.billing_days} days."
         )
 
     return result

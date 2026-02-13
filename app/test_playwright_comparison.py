@@ -117,8 +117,8 @@ class TestComparisonModeToggle:
         page.goto(streamlit_app)
         page.wait_for_load_state("networkidle")
 
-        # Welcome page should show (Single File mode with no upload)
-        expect(page.get_by_text("Welcome to Energy Insight")).to_be_visible(timeout=15000)
+        # Landing page should show the title
+        expect(page.get_by_text("Energy Insight").first).to_be_visible(timeout=15000)
 
     def test_switch_to_comparison_shows_instructions(self, page: Page, streamlit_app: str):
         """Switching to Bill Comparison mode shows comparison instructions."""

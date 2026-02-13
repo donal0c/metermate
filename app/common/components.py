@@ -26,14 +26,28 @@ def fmt_value(value, prefix="", suffix="", fmt_spec=None):
     return f"{prefix}{value}{suffix}"
 
 
-def field_html(label: str, value, *, warn: bool = False) -> str:
+def field_html(label: str, value, *, warn: bool = False,
+               edited: bool = False, original: str | None = None) -> str:
     """Render a single key-value field as styled HTML.
 
     Args:
         label: Field label (e.g. "Supplier").
         value: Display value (string). None renders as a dash.
         warn: If True and value is not None, show a warning indicator.
+        edited: If True, show blue "manually corrected" indicator.
+        original: Original extracted value (shown as tooltip when edited).
     """
+    if edited and value is not None:
+        tooltip = f' title="Originally extracted: {original}"' if original else ''
+        return (
+            f'<div data-testid="edited-field" style="border-left: 3px solid #3b82f6; '
+            f'padding-left: 0.5rem; margin-bottom: 0.4rem;"{tooltip}>'
+            f'<span style="color: {TEXT_MUTED}; font-size: 0.8rem;">{label}</span><br>'
+            f'<span style="color: #3b82f6; font-family: {FONT_MONO}; '
+            f'font-size: 0.95rem;">{value}</span>'
+            f'<span style="color: #3b82f6; font-size: 0.7rem; margin-left: 0.3rem;">'
+            f'manually corrected</span></div>'
+        )
     if warn and value is not None:
         return (
             f'<div style="border-left: 3px solid {SEVERITY_WARNING}; padding-left: 0.5rem; '
