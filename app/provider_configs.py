@@ -195,8 +195,16 @@ GO_POWER_CONFIG = {
         "billing_period": {
             "patterns": [
                 (None, r"(?:Billing|Accounting|Usage)\s*Period\s*[:\s]*(\d{1,2}\s+\w+\s+\d{2,4}\s*(?:to|-)\s*\d{1,2}\s+\w+\s+\d{2,4})"),
+                # Go Power compressed format: "Usage Period 1 - 31/03/2024"
+                (None, r"Usage\s+Period\s+(\d{1,2})\s*-\s*(\d{1,2}/\d{2}/\d{4})"),
             ],
             "confidence": 0.90,
+        },
+        "invoice_date": {
+            "patterns": [
+                (None, r"Doc\.?\s+Date\s*\n?\s*(\d{2}/\d{2}/\d{4})"),
+            ],
+            "confidence": 0.85,
         },
         "day_kwh": {
             "patterns": [
@@ -211,6 +219,14 @@ GO_POWER_CONFIG = {
                 (None, r"Energy\s+\d[\d,]*\s*kWh\s+(\d+\.\d+)\s*[€\u20ac]"),
             ],
             "confidence": 0.85,
+            "transform": "cents_to_euros",
+        },
+        "day_cost": {
+            "patterns": [
+                (None, r"Energy\s+\d[\d,]*\s*kWh\s+\d+\.\d+\s*[€\u20ac](\d[\d,]*\.\d{2})"),
+            ],
+            "confidence": 0.85,
+            "transform": "strip_commas",
         },
         "standing_charge": {
             "patterns": [

@@ -234,12 +234,15 @@ def get_ocr_dataframe(
     import pytesseract
 
     if is_image:
-        from PIL import Image
+        from PIL import Image, ImageOps
         if isinstance(source, str):
-            images = [Image.open(source)]
+            img = Image.open(source)
         else:
             import io
-            images = [Image.open(io.BytesIO(source))]
+            img = Image.open(io.BytesIO(source))
+        # Auto-rotate based on EXIF orientation tag (handles phone photos)
+        img = ImageOps.exif_transpose(img)
+        images = [img]
     else:
         from pdf2image import convert_from_bytes, convert_from_path
         if isinstance(source, str):

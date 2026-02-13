@@ -127,7 +127,7 @@ def _extract_metadata(doc: pymupdf.Document) -> dict:
 # Ordered by specificity (longer/more-specific keywords first within each provider).
 # Provider order matters for tie-breaking: more common Irish providers first.
 PROVIDER_KEYWORDS: dict[str, list[str]] = {
-    "Electric Ireland": ["electric ireland", "electricireland.ie"],
+    "Electric Ireland": ["electric ireland", "electricireland.ie", "electricireland", "myelectricireland"],
     "SSE Airtricity": ["sse airtricity", "airtricity", "sseairtricity.com"],
     "Bord Gais": ["bord gáis", "bord gais", "bordgais", "bordgaisenergy.ie"],
     "Kerry Petroleum": ["kerry petroleum"],
@@ -181,6 +181,10 @@ def detect_provider(text: str) -> ProviderDetectionResult:
         )
 
     text_lower = text.lower()
+
+    # Normalize whitespace: collapse newlines, tabs, and multiple spaces into
+    # a single space so that "Electric\nIreland" matches "electric ireland".
+    text_lower = re.sub(r"\s+", " ", text_lower)
 
     # Score each provider by total keyword occurrences.
     # To avoid double-counting substring pairs (e.g. "esb network" within
@@ -316,7 +320,97 @@ def _apply_transform(value: str, transform: str | None) -> str:
         return value.replace(",", "")
     if transform == "strip_spaces":
         return value.replace(" ", "")
+    if transform == "cents_to_euros":
+        try:
+            return str(round(float(value.replace(",", "")) / 100.0, 4))
+        except (ValueError, TypeError):
+            return value
     return value
+
+
+# ---- Post-processing: rate sanity checks and computed costs ----
+
+# Irish electricity rates are typically 0.10-0.50 EUR/kWh.  Any extracted
+# rate above 1.0 EUR/kWh is almost certainly expressed in cents and needs
+# to be divided by 100.
+_RATE_FIELDS = ("day_rate", "night_rate", "peak_rate")
+_RATE_MAX_EUR_PER_KWH = 1.0
+
+# Field triplets for computing missing costs: (cost, rate, consumption)
+_COST_TRIPLETS = (
+    ("day_cost", "day_rate", "day_kwh"),
+    ("night_cost", "night_rate", "night_kwh"),
+    ("peak_cost", "peak_rate", "peak_kwh"),
+)
+
+
+def _postprocess_rates(result: Tier3ExtractionResult) -> None:
+    """Sanity-check rate fields; divide by 100 if they look like cents.
+
+    Modifies *result* in-place.  Adds a warning for every adjusted field.
+    """
+    for rate_field in _RATE_FIELDS:
+        fer = result.fields.get(rate_field)
+        if fer is None:
+            continue
+        rate_val = _safe_float(fer.value)
+        if rate_val is None:
+            continue
+        if rate_val > _RATE_MAX_EUR_PER_KWH:
+            adjusted = round(rate_val / 100.0, 4)
+            result.fields[rate_field] = FieldExtractionResult(
+                field_name=rate_field,
+                value=str(adjusted),
+                confidence=fer.confidence,
+                pattern_index=fer.pattern_index,
+            )
+            result.warnings.append(
+                f"{rate_field} adjusted from {rate_val} to {adjusted} "
+                f"EUR/kWh (was likely in cents)"
+            )
+
+
+def _postprocess_computed_costs(result: Tier3ExtractionResult) -> None:
+    """Compute missing cost fields from rate * consumption when both present.
+
+    Computed fields get a reduced confidence (0.70) and are flagged with
+    '(calculated)' appended so the display layer can distinguish them.
+    Modifies *result* in-place.
+    """
+    for cost_field, rate_field, kwh_field in _COST_TRIPLETS:
+        # Only compute if cost is missing or zero
+        existing = result.fields.get(cost_field)
+        if existing is not None:
+            existing_val = _safe_float(existing.value)
+            if existing_val is not None and existing_val > 0:
+                continue  # Already has a valid cost -- skip
+
+        rate_fer = result.fields.get(rate_field)
+        kwh_fer = result.fields.get(kwh_field)
+        if rate_fer is None or kwh_fer is None:
+            continue
+
+        rate_val = _safe_float(rate_fer.value)
+        kwh_val = _safe_float(kwh_fer.value)
+        if rate_val is None or kwh_val is None:
+            continue
+        if rate_val <= 0 or kwh_val <= 0:
+            continue
+
+        computed_cost = round(rate_val * kwh_val, 2)
+        result.fields[cost_field] = FieldExtractionResult(
+            field_name=cost_field,
+            value=f"{computed_cost:.2f} (calculated)",
+            confidence=0.70,
+            pattern_index=-1,  # sentinel: not from a regex pattern
+        )
+        result.warnings.append(
+            f"{cost_field} computed as {rate_field}({rate_val}) * "
+            f"{kwh_field}({kwh_val}) = {computed_cost:.2f}"
+        )
+        # Update field count
+        if existing is None:
+            result.field_count += 1
 
 
 # ---- Core extraction engine ----
@@ -457,13 +551,19 @@ def extract_with_config(text: str, provider_name: str) -> Tier3ExtractionResult:
     hit_count = len(extracted)
     hit_rate = hit_count / total_fields if total_fields > 0 else 0.0
 
-    return Tier3ExtractionResult(
+    result = Tier3ExtractionResult(
         provider=provider_name,
         fields=extracted,
         field_count=hit_count,
         hit_rate=hit_rate,
         warnings=warnings,
     )
+
+    # Post-process: sanity-check rates and compute missing costs
+    _postprocess_rates(result)
+    _postprocess_computed_costs(result)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +650,8 @@ TIER2_UNIVERSAL_PATTERNS: dict[str, list[tuple[str, float, str | None]]] = {
         (r"Night\s+(?:Energy|Rate)\s+\d[\d,]*\s*(?:kWh|xWh)\s*@\s*[€\u20ac]?\s*(\d+\.\d+)", 0.80, None),
     ],
     "standing_charge": [
-        (r"Standing\s*Charge\s*.*?[€\u20ac]\s*(\d+[\d,.]*\.\d{2})", 0.75, "strip_commas"),
+        # Limit scan distance to prevent grabbing unrelated amounts
+        (r"Standing\s*Charge\s*.{0,80}?[€\u20ac]\s*(\d+[\d,.]*\.\d{2})", 0.75, "strip_commas"),
     ],
     "pso_levy": [
         (r"PSO\s+Levy.*?[€\u20ac]?\s*(\d+[\d,.]*\.\d{2})", 0.75, None),
