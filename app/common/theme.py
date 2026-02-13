@@ -195,25 +195,25 @@ _THEME_CSS = """
         color: #e2e8f0 !important;
     }
 
-    /* Expanders - dark text on light background */
+    /* Expanders */
     .streamlit-expanderHeader {
-        color: #1a1a2e !important;
-        background: #f1f5f9;
+        color: #e2e8f0 !important;
+        background: #1e2433;
     }
 
     .streamlit-expanderHeader p,
     .streamlit-expanderHeader span,
     .streamlit-expanderHeader svg {
-        color: #1a1a2e !important;
+        color: #e2e8f0 !important;
     }
 
     [data-testid="stExpander"] summary {
-        color: #1a1a2e !important;
+        color: #e2e8f0 !important;
     }
 
     [data-testid="stExpander"] summary p,
     [data-testid="stExpander"] summary span {
-        color: #1a1a2e !important;
+        color: #e2e8f0 !important;
     }
 
     .streamlit-expanderContent {
