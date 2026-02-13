@@ -106,7 +106,7 @@ _THEME_CSS = """
         background: #1e2433;
         border-radius: 8px;
         padding: 4px;
-        gap: 4px;
+        gap: 2px;
     }
 
     .stTabs [data-baseweb="tab"] {
@@ -114,6 +114,7 @@ _THEME_CSS = """
         border-radius: 6px;
         color: #cbd5e1 !important;
         font-weight: 500;
+        padding: 0.5rem 1rem !important;
     }
 
     .stTabs [aria-selected="true"] {
