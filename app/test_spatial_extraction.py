@@ -311,6 +311,19 @@ class TestDisambiguation:
         # Second one (y=500) should win
         assert best["total_incl_vat"].bbox[1] == 500
 
+    def test_same_specificity_prefers_earlier_page(self):
+        """For same specificity across pages, prefer the earlier page."""
+        matches = [
+            AnchorMatch(
+                "day_kwh", "Day Energy", (100, 900, 120, 20), 0, [0], page_num=9
+            ),
+            AnchorMatch(
+                "day_kwh", "Day Energy", (100, 200, 120, 20), 0, [1], page_num=1
+            ),
+        ]
+        best = disambiguate_anchors(matches)
+        assert best["day_kwh"].page_num == 1
+
 
 # ===================================================================
 # Value type matching tests

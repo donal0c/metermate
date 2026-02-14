@@ -304,6 +304,37 @@ def _preprocess_energia(text: str) -> str:
     t = re.sub(r'\bTatal\b', 'Total', t)
     t = re.sub(r'\bXWh\b', 'kWh', t)
     t = re.sub(r'\bxWh\b', 'kWh', t)
+
+    # Scanned compiled Energia bills can collapse the tariff summary into
+    # one noisy line (e.g. "... Day ... 2,966 1,878 31 Days ... €1,139.75").
+    # Add canonical helper lines so existing regex patterns can extract
+    # day/night units and subtotal reliably.
+    summary_match = re.search(
+        r"Day[\s\S]{0,400}?(\d{1,3},\d{3})\s+(\d{1,3},\d{3})\s+(\d{1,2})\s+Days",
+        t,
+        re.IGNORECASE,
+    )
+    synthetic_lines: list[str] = []
+    if summary_match:
+        synthetic_lines.extend(
+            [
+                f"Day Energy {summary_match.group(1)} kWh",
+                f"Night Energy {summary_match.group(2)} kWh",
+                f"Standing Charge {summary_match.group(3)} Days",
+            ]
+        )
+
+    for line in t.splitlines():
+        low = line.lower()
+        if "excluding" in low and "vat" in low:
+            amounts = re.findall(r"[€\u20ac]?\s*([\d,]+\.\d{2})", line)
+            if amounts:
+                synthetic_lines.append(f"Total Excluding VAT €{amounts[-1]}")
+                break
+
+    if synthetic_lines:
+        t = t + "\n" + "\n".join(synthetic_lines)
+
     # Normalize multiple spaces
     t = re.sub(r'  +', ' ', t)
     return t

@@ -200,6 +200,7 @@ class AnchorMatch:
     bbox: tuple[int, int, int, int]  # (left, top, width, height)
     specificity: int  # index in anchor list (0 = most specific)
     word_indices: list[int]  # indices into the OCR dataframe
+    page_num: int = 1
 
 
 @dataclass
@@ -441,6 +442,7 @@ def find_anchors(
                                 bbox=bbox,
                                 specificity=specificity,
                                 word_indices=matched_indices,
+                                page_num=page,
                             )
                         )
                         break  # Found match for this label, move to next label
@@ -699,7 +701,8 @@ def disambiguate_anchors(
 
     Rules:
       1. Most specific label first (lowest specificity index)
-      2. For ties, prefer last occurrence (summary at bottom of page)
+      2. For ties, prefer earliest page (helps multi-bill compilations)
+      3. For same page/specificity, prefer last occurrence (summary at bottom)
     """
     best: dict[str, AnchorMatch] = {}
 
@@ -715,8 +718,14 @@ def disambiguate_anchors(
         if match.specificity < current.specificity:
             best[field] = match
         elif match.specificity == current.specificity:
-            # For same specificity, prefer last occurrence (lower on page)
-            if match.bbox[1] > current.bbox[1]:  # higher y = lower on page
+            # For same specificity, prefer earlier page first.
+            if match.page_num < current.page_num:
+                best[field] = match
+            # If both are on the same page, prefer lower visual position.
+            elif (
+                match.page_num == current.page_num
+                and match.bbox[1] > current.bbox[1]  # higher y = lower on page
+            ):
                 best[field] = match
 
     return best

@@ -400,6 +400,19 @@ class TestPreprocessHooks:
         result = _preprocess_energia(text)
         assert "kWh" in result
 
+    def test_energia_normalize_synthesizes_scanned_summary_lines(self):
+        text = (
+            "Gas. Total Carbon Night Day Standing Electricity EEOS EEOS Rate Charge "
+            "Excluding Rate Credit Charge Charge Tax VAT . "
+            "4,844 4,344 4,844 2422 4,844 2,966 1,878 31 Days kWh kWh "
+            "€371.09 €946.45 €170.68 €20.43 €10.90 €1,139.75"
+        )
+        from pipeline import _preprocess_energia
+        result = _preprocess_energia(text)
+        assert "Day Energy 2,966 kWh" in result
+        assert "Night Energy 1,878 kWh" in result
+        assert "Total Excluding VAT €1,139.75" in result
+
     def test_kerry_normalize_pipes(self):
         text = "KEROSENE | 849 | 106.21"
         from pipeline import _preprocess_kerry

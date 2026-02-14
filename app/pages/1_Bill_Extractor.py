@@ -1018,6 +1018,11 @@ def _comparison_summary(df: pd.DataFrame):
         display_df,
         use_container_width=True,
         hide_index=True,
+        column_config={
+            "Confidence": st.column_config.TextColumn(
+                "Confidence", width="medium",
+            ),
+        },
     )
 
 
@@ -1490,6 +1495,8 @@ with st.sidebar:
         if st.button("Clear All Bills", use_container_width=True, key="clear_bills"):
             st.session_state.extracted_bills = []
             st.session_state.processed_hashes = set()
+            # Increment uploader key to force widget reset (clears stale filenames)
+            st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
             st.rerun()
 
 
@@ -1501,12 +1508,13 @@ st.markdown("## \U0001f4c4 Bill Extractor")
 st.caption("Upload electricity bills to extract costs, consumption, and rates")
 
 # Upload zone (main content area, not sidebar)
+_uploader_key = f"bill_uploader_{st.session_state.get('uploader_key', 0)}"
 uploaded_files = st.file_uploader(
     "Upload electricity bills to extract costs, consumption, and rates",
     type=['pdf', 'jpg', 'jpeg', 'png'],
     accept_multiple_files=True,
     help="Drag and drop or browse. Supports PDF, JPG, JPEG, PNG. Upload multiple files at once.",
-    key="bill_uploader",
+    key=_uploader_key,
     label_visibility="collapsed",
 )
 

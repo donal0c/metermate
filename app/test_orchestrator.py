@@ -320,6 +320,27 @@ class TestScannedPDFHandling:
         # Should indicate low confidence or need for OCR
         assert result.confidence.band in ("escalate", "accept_with_review")
 
+    def test_scanned_energia_extracts_day_night_and_subtotal(self):
+        path = _pdf_path("094634_scan_14012026.pdf")
+        if not _pdf_exists("094634_scan_14012026.pdf"):
+            pytest.skip("PDF not found")
+
+        result = extract_bill_pipeline(path)
+        day_item = next(
+            (li for li in result.bill.line_items if li.description == "Day Energy"),
+            None,
+        )
+        night_item = next(
+            (li for li in result.bill.line_items if li.description == "Night Energy"),
+            None,
+        )
+
+        assert day_item is not None
+        assert night_item is not None
+        assert day_item.quantity == pytest.approx(2966.0, abs=0.01)
+        assert night_item.quantity == pytest.approx(1878.0, abs=0.01)
+        assert result.bill.subtotal == pytest.approx(1139.75, abs=0.02)
+
 
 # ===================================================================
 # Ground-truth accuracy tests
