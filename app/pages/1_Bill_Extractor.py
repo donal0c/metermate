@@ -37,6 +37,7 @@ from common.formatters import (
     parse_bill_date as parse_bill_date_util,
     compute_billing_days,
 )
+from common.comparison import NO_MPRN_LABEL, filter_dataframe_by_mprn
 from common.session import content_hash
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
@@ -824,18 +825,22 @@ def show_bill_comparison(bills, edit_indices=None):
         df = df.sort_values('sort_date').reset_index(drop=True)
 
     # MPRN filter (only when multiple distinct MPRNs present)
-    unique_mprns = sorted(set(m for m in df['mprn'] if m))
+    mprn_series = df['mprn'].fillna('').astype(str).str.strip()
+    unique_mprns = sorted(set(m for m in mprn_series if m))
+    has_blank_mprn = (mprn_series == '').any()
+
     if len(unique_mprns) > 1:
         import hashlib as _hl
         _mprn_hash = _hl.md5(",".join(unique_mprns).encode()).hexdigest()[:6]
+        options = unique_mprns + ([NO_MPRN_LABEL] if has_blank_mprn else [])
         selected_mprns = st.multiselect(
             "Filter by MPRN (property)",
-            options=unique_mprns,
-            default=unique_mprns,
+            options=options,
+            default=options,
             key=f"mprn_filter_{_mprn_hash}",
         )
         if selected_mprns:
-            df = df[df['mprn'].isin(selected_mprns)].reset_index(drop=True)
+            df = filter_dataframe_by_mprn(df, selected_mprns)
         if len(df) < 2:
             st.info("Select at least 2 bills for comparison.")
             return
