@@ -1,6 +1,6 @@
 """Energy Insight - Bill Extractor
 
-Upload and extract data from 1-N electricity bills in a single, fluid
+Upload and extract data from 1-N energy bills in a single, fluid
 workflow. Files accumulate — upload one, look at it, upload another,
 compare. No mode switching required.
 """
@@ -10,7 +10,7 @@ import streamlit as st
 import pandas as pd
 import io
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import asdict
 
 # Bridge Streamlit Cloud secrets into env vars for pipeline code
@@ -31,11 +31,16 @@ else:
 
 from bill_parser import BillData, generic_to_legacy
 from orchestrator import extract_bill_pipeline, extract_bill_from_image
+from fuel_conversions import (
+    FUEL_TYPES, UNIT_DISPLAY_NAMES, convert_to_kwh, get_display_name,
+    get_all_units, get_valid_fuel_units_map,
+)
 from common.theme import apply_theme
 from common.components import fmt_value, field_html
 from common.formatters import (
     parse_bill_date as parse_bill_date_util,
     compute_billing_days,
+    build_monthly_df,
 )
 from common.comparison import NO_MPRN_LABEL, filter_dataframe_by_mprn
 from common.session import content_hash
@@ -240,8 +245,8 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
 
     # Per-section field counts for actionable breakdown
     _sections = {
-        "Account": ["supplier", "customer_name", "mprn", "account_number",
-                     "meter_number", "invoice_number"],
+        "Account": ["supplier", "customer_name", "mprn", "gprn",
+                     "account_number", "meter_number", "invoice_number"],
         "Billing": ["bill_date", "billing_period_start", "billing_period_end"],
         "Consumption": ["day_units_kwh", "night_units_kwh", "peak_units_kwh",
                         "total_units_kwh"],
@@ -335,10 +340,16 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
         ("Supplier", 'supplier'),
         ("Customer", 'customer_name'),
         ("MPRN", 'mprn'),
+        ("GPRN", 'gprn'),
         ("Account No.", 'account_number'),
         ("Meter No.", 'meter_number'),
         ("Invoice No.", 'invoice_number'),
     ]
+    # Filter out MPRN/GPRN when not applicable (show only the relevant one)
+    if bill.gprn and not bill.mprn:
+        account_fields = [f for f in account_fields if f[1] != 'mprn']
+    elif not bill.gprn:
+        account_fields = [f for f in account_fields if f[1] != 'gprn']
     for i, (label, field_name) in enumerate(account_fields):
         with cols[i % 4]:
             display, is_edited, orig = _display_value(bill, field_name, key_suffix)
@@ -630,6 +641,48 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
             st.code(raw_text, language=None)
 
 
+def _show_manual_entry_summary(bill: BillData):
+    """Display a compact summary card for a manual fuel entry."""
+    fuel_display = get_display_name(bill.fuel_type) if bill.fuel_type else "Unknown Fuel"
+    supplier_label = bill.supplier or "Not specified"
+    kwh = bill.total_units_kwh
+    cost = bill.total_this_period
+    effective_rate = cost / kwh if cost and kwh and kwh > 0 else None
+
+    st.markdown(
+        f'<div style="padding: 1rem; background: #1e2433; border: 1px solid #3b82f6; '
+        f'border-radius: 8px; margin-bottom: 1rem;">'
+        f'<div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">'
+        f'<span style="font-size: 1.2rem;">&#9998;</span>'
+        f'<span style="color: #e2e8f0; font-weight: 600; font-size: 1.1rem;">'
+        f'Manual Entry: {fuel_display}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(3)
+    with cols[0]:
+        st.markdown(field_html("Fuel Type", fuel_display), unsafe_allow_html=True)
+        st.markdown(field_html("Supplier", supplier_label), unsafe_allow_html=True)
+    with cols[1]:
+        kwh_str = f"{kwh:,.1f} kWh" if kwh is not None else None
+        st.markdown(field_html("Energy (kWh)", kwh_str), unsafe_allow_html=True)
+        cost_str = f"\u20ac{cost:,.2f}" if cost is not None else None
+        st.markdown(field_html("Total Cost", cost_str), unsafe_allow_html=True)
+    with cols[2]:
+        rate_str = f"\u20ac{effective_rate:.4f}/kWh" if effective_rate else None
+        st.markdown(field_html("Effective Rate", rate_str), unsafe_allow_html=True)
+        date_str = bill.bill_date
+        st.markdown(field_html("Date", date_str), unsafe_allow_html=True)
+
+    if bill.billing_period_start and bill.billing_period_end:
+        st.markdown(
+            field_html("Period", f"{bill.billing_period_start} \u2192 {bill.billing_period_end}"),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def generate_bill_excel(bill: BillData) -> io.BytesIO:
     """Generate an Excel file from extracted bill data."""
     buffer = io.BytesIO()
@@ -812,6 +865,7 @@ def show_bill_comparison(bills, edit_indices=None):
             'total_cost': total_cost,
             'amount_due': amount_due,
             'confidence': bill.confidence_score,
+            'fuel_type': bill.fuel_type,
             'cost_per_day': cost_per_day,
             'kwh_per_day': kwh_per_day,
             'effective_rate': effective_rate,
@@ -844,6 +898,61 @@ def show_bill_comparison(bills, edit_indices=None):
         if len(df) < 2:
             st.info("Select at least 2 bills for comparison.")
             return
+
+    # Date range filter (only when bills have parseable dates)
+    dated_mask = df['sort_date'].notna()
+    if dated_mask.sum() >= 2:
+        date_min = df.loc[dated_mask, 'sort_date'].min()
+        date_max = df.loc[dated_mask, 'sort_date'].max()
+        span_days = (date_max - date_min).days
+
+        filter_options = ["All Bills"]
+        if span_days >= 365:
+            filter_options.append("Last 12 Months")
+        if span_days >= 182:
+            filter_options.append("Last 6 Months")
+        filter_options.append("Custom Range")
+
+        if len(filter_options) > 2:  # Only show if there's something to filter
+            date_filter = st.segmented_control(
+                "Date Range",
+                options=filter_options,
+                default="All Bills",
+                key="_bill_date_filter",
+                label_visibility="collapsed",
+            )
+            if date_filter is None:
+                date_filter = "All Bills"
+
+            if date_filter == "Last 12 Months":
+                cutoff = date_max - timedelta(days=364)
+                df = df[(df['sort_date'].isna()) | (df['sort_date'] >= cutoff)]
+            elif date_filter == "Last 6 Months":
+                cutoff = date_max - timedelta(days=182)
+                df = df[(df['sort_date'].isna()) | (df['sort_date'] >= cutoff)]
+            elif date_filter == "Custom Range":
+                col1, col2, _ = st.columns([1, 1, 3])
+                with col1:
+                    custom_start = st.date_input(
+                        "From", value=date_min,
+                        min_value=date_min, max_value=date_max,
+                        key="_bill_date_start",
+                    )
+                with col2:
+                    custom_end = st.date_input(
+                        "To", value=date_max,
+                        min_value=date_min, max_value=date_max,
+                        key="_bill_date_end",
+                    )
+                df = df[
+                    (df['sort_date'].isna())
+                    | ((df['sort_date'] >= custom_start)
+                       & (df['sort_date'] <= custom_end))
+                ]
+
+            if len(df) < 2:
+                st.info("Not enough bills in the selected date range for comparison.")
+                return
 
     # Generate chart labels
     df['label'] = df.apply(_bill_label, axis=1)
@@ -1035,71 +1144,119 @@ def _comparison_cost_trends(df: pd.DataFrame):
     """Show cost trend chart across bills."""
     st.markdown("### Cost Trends Over Time")
 
-    labels = df['label'].tolist()
     has_cost = df['total_cost'].notna().any()
-
     if not has_cost:
         st.info("No cost data available in the extracted bills.")
         return
 
+    # Monthly view toggle — available when ≥2 bills have date ranges
+    monthly_df = build_monthly_df(df)
+    show_monthly = False
+    if monthly_df is not None and len(monthly_df) >= 2:
+        show_monthly = st.toggle(
+            "Calendar month view",
+            value=True,
+            key="cost_monthly_view",
+        )
+
     # Normalisation toggle
     has_daily = df['cost_per_day'].notna().any()
     normalise = False
-    if has_daily:
+    if has_daily or show_monthly:
         normalise = st.toggle(
-            "Normalise by billing period (cost per day)",
+            "Show as daily average" if show_monthly else "Normalise by billing period (cost per day)",
             value=False,
             key="cost_normalise",
         )
 
     fig = go.Figure()
 
-    if normalise:
-        fig.add_trace(go.Scatter(
+    if show_monthly and monthly_df is not None:
+        labels = monthly_df['month_label'].tolist()
+        if normalise:
+            y_vals = monthly_df['cost_per_day']
+            y_title = "Cost per Day (\u20ac)"
+            fmt_fn = lambda v: f"\u20ac{v:.2f}" if pd.notna(v) else ""
+        else:
+            y_vals = monthly_df['total_cost']
+            y_title = "Cost (\u20ac)"
+            fmt_fn = lambda v: f"\u20ac{v:,.0f}" if pd.notna(v) else ""
+
+        fig.add_trace(go.Bar(
             x=labels,
-            y=df['cost_per_day'],
-            mode='lines+markers',
-            name='Cost/Day',
-            line=dict(color='#4ade80', width=3),
-            marker=dict(size=10),
+            y=y_vals,
+            name='Cost/Day' if normalise else 'Total Cost',
+            marker_color='#4ade80',
+            text=[fmt_fn(v) for v in y_vals],
+            textposition='auto',
         ))
-        y_title = "Cost per Day (\u20ac)"
+
+        if not normalise:
+            if monthly_df['subtotal'].notna().any():
+                fig.add_trace(go.Bar(
+                    x=labels,
+                    y=monthly_df['subtotal'],
+                    name='Subtotal (ex VAT)',
+                    marker_color='#3b82f6',
+                ))
+            if monthly_df['standing_charge'].notna().any():
+                fig.add_trace(go.Bar(
+                    x=labels,
+                    y=monthly_df['standing_charge'],
+                    name='Standing Charge',
+                    marker_color='#f59e0b',
+                ))
+
+        x_title = "Month"
+        # Change summary from monthly data
+        cost_col = 'cost_per_day' if normalise else 'total_cost'
+        summary_df = monthly_df.dropna(subset=[cost_col])
     else:
-        # Total cost
-        fig.add_trace(go.Scatter(
-            x=labels,
-            y=df['total_cost'],
-            mode='lines+markers',
-            name='Total Cost',
-            line=dict(color='#4ade80', width=3),
-            marker=dict(size=10),
-        ))
-
-        # Subtotal
-        if df['subtotal'].notna().any():
+        labels = df['label'].tolist()
+        if normalise:
             fig.add_trace(go.Scatter(
                 x=labels,
-                y=df['subtotal'],
+                y=df['cost_per_day'],
                 mode='lines+markers',
-                name='Subtotal (ex VAT)',
-                line=dict(color='#3b82f6', width=2, dash='dot'),
-                marker=dict(size=8),
+                name='Cost/Day',
+                line=dict(color='#4ade80', width=3),
+                marker=dict(size=10),
             ))
-
-        # Standing charge
-        if df['standing_charge'].notna().any():
+            y_title = "Cost per Day (\u20ac)"
+        else:
             fig.add_trace(go.Scatter(
                 x=labels,
-                y=df['standing_charge'],
+                y=df['total_cost'],
                 mode='lines+markers',
-                name='Standing Charge',
-                line=dict(color='#f59e0b', width=2, dash='dash'),
-                marker=dict(size=8),
+                name='Total Cost',
+                line=dict(color='#4ade80', width=3),
+                marker=dict(size=10),
             ))
-        y_title = "Cost (\u20ac)"
+            if df['subtotal'].notna().any():
+                fig.add_trace(go.Scatter(
+                    x=labels,
+                    y=df['subtotal'],
+                    mode='lines+markers',
+                    name='Subtotal (ex VAT)',
+                    line=dict(color='#3b82f6', width=2, dash='dot'),
+                    marker=dict(size=8),
+                ))
+            if df['standing_charge'].notna().any():
+                fig.add_trace(go.Scatter(
+                    x=labels,
+                    y=df['standing_charge'],
+                    mode='lines+markers',
+                    name='Standing Charge',
+                    line=dict(color='#f59e0b', width=2, dash='dash'),
+                    marker=dict(size=8),
+                ))
+            y_title = "Cost (\u20ac)"
+        x_title = "Billing Period"
+        cost_col = 'cost_per_day' if normalise else 'total_cost'
+        summary_df = df.dropna(subset=[cost_col])
 
     fig.update_layout(
-        xaxis_title="Billing Period",
+        xaxis_title=x_title,
         yaxis_title=y_title,
         template="plotly_dark",
         paper_bgcolor='rgba(0,0,0,0)',
@@ -1111,21 +1268,22 @@ def _comparison_cost_trends(df: pd.DataFrame):
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Cost change summary (uses normalised values when toggle is on)
-    cost_col = 'cost_per_day' if normalise else 'total_cost'
+    # Cost change summary
     unit = "/day" if normalise else ""
-    valid = df.dropna(subset=[cost_col])
-    if len(valid) >= 2:
-        first_cost = valid.iloc[0][cost_col]
-        last_cost = valid.iloc[-1][cost_col]
+    if len(summary_df) >= 2:
+        first_cost = summary_df.iloc[0][cost_col]
+        last_cost = summary_df.iloc[-1][cost_col]
         change = last_cost - first_cost
         change_pct = (change / first_cost * 100) if first_cost else 0
 
+        label_first = summary_df.iloc[0].get('month_label', 'First Bill') if show_monthly else 'First Bill'
+        label_last = summary_df.iloc[-1].get('month_label', 'Latest Bill') if show_monthly else 'Latest Bill'
+
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("First Bill", f"\u20ac{first_cost:,.2f}{unit}")
+            st.metric(label_first, f"\u20ac{first_cost:,.2f}{unit}")
         with col2:
-            st.metric("Latest Bill", f"\u20ac{last_cost:,.2f}{unit}")
+            st.metric(label_last, f"\u20ac{last_cost:,.2f}{unit}")
         with col3:
             st.metric("Change", f"\u20ac{change:+,.2f}{unit}", delta=f"{change_pct:+.1f}%")
 
@@ -1134,109 +1292,187 @@ def _comparison_consumption(df: pd.DataFrame):
     """Show consumption trend charts."""
     st.markdown("### Consumption Trends")
 
-    labels = df['label'].tolist()
     has_kwh = df['total_kwh'].notna().any()
-
     if not has_kwh:
         st.info("No consumption data available in the extracted bills.")
         return
 
+    # Monthly view toggle
+    monthly_df = build_monthly_df(df)
+    show_monthly = False
+    if monthly_df is not None and len(monthly_df) >= 2:
+        show_monthly = st.toggle(
+            "Calendar month view",
+            value=True,
+            key="consumption_monthly_view",
+        )
+
     # Normalisation toggle
     has_daily = df['kwh_per_day'].notna().any()
     normalise = False
-    if has_daily:
+    if has_daily or show_monthly:
         normalise = st.toggle(
-            "Normalise by billing period (kWh per day)",
+            "Show as daily average" if show_monthly else "Normalise by billing period (kWh per day)",
             value=False,
             key="consumption_normalise",
         )
 
-    # Total consumption bar chart
     fig = go.Figure()
-    if normalise:
-        y_vals = df['kwh_per_day']
-        y_title = "Consumption (kWh/day)"
-        fmt_fn = lambda v: f"{v:.1f}" if pd.notna(v) else ""
-    else:
-        y_vals = df['total_kwh']
-        y_title = "Consumption (kWh)"
-        fmt_fn = lambda v: f"{v:,.0f}" if pd.notna(v) else ""
 
-    fig.add_trace(go.Bar(
-        x=labels,
-        y=y_vals,
-        name='kWh/day' if normalise else 'Total kWh',
-        marker_color='#4ade80',
-        text=[fmt_fn(v) for v in y_vals],
-        textposition='auto',
-    ))
-    fig.update_layout(
-        xaxis_title="Billing Period",
-        yaxis_title=y_title,
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(family="DM Sans", color="#e2e8f0"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if show_monthly and monthly_df is not None:
+        labels = monthly_df['month_label'].tolist()
+        if normalise:
+            y_vals = monthly_df['kwh_per_day']
+            y_title = "Consumption (kWh/day)"
+            fmt_fn = lambda v: f"{v:.1f}" if pd.notna(v) else ""
+        else:
+            y_vals = monthly_df['total_kwh']
+            y_title = "Consumption (kWh)"
+            fmt_fn = lambda v: f"{v:,.0f}" if pd.notna(v) else ""
 
-    # Day/Night/Peak breakdown (raw only — normalising breakdown per day
-    # would require per-component billing days which we don't have)
-    if not normalise:
-        has_breakdown = (
-            df['day_kwh'].notna().any()
-            or df['night_kwh'].notna().any()
-            or df['peak_kwh'].notna().any()
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=y_vals,
+            name='kWh/day' if normalise else 'Total kWh',
+            marker_color='#4ade80',
+            text=[fmt_fn(v) for v in y_vals],
+            textposition='auto',
+        ))
+        fig.update_layout(
+            xaxis_title="Month",
+            yaxis_title=y_title,
+            template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="DM Sans", color="#e2e8f0"),
         )
-        if has_breakdown:
-            st.markdown("#### Day/Night/Peak Breakdown")
+        st.plotly_chart(fig, use_container_width=True)
 
-            fig2 = go.Figure()
-            if df['day_kwh'].notna().any():
-                fig2.add_trace(go.Bar(
-                    x=labels, y=df['day_kwh'],
-                    name='Day', marker_color='#f59e0b',
-                ))
-            if df['night_kwh'].notna().any():
-                fig2.add_trace(go.Bar(
-                    x=labels, y=df['night_kwh'],
-                    name='Night', marker_color='#3b82f6',
-                ))
-            if df['peak_kwh'].notna().any():
-                fig2.add_trace(go.Bar(
-                    x=labels, y=df['peak_kwh'],
-                    name='Peak', marker_color='#ef4444',
-                ))
-
-            fig2.update_layout(
-                barmode='stack',
-                xaxis_title="Billing Period",
-                yaxis_title="Consumption (kWh)",
-                template="plotly_dark",
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(family="DM Sans", color="#e2e8f0"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        # Day/Night/Peak breakdown (monthly, raw only)
+        if not normalise:
+            has_breakdown = (
+                monthly_df['day_kwh'].notna().any()
+                or monthly_df['night_kwh'].notna().any()
+                or monthly_df['peak_kwh'].notna().any()
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            if has_breakdown:
+                st.markdown("#### Day/Night/Peak Breakdown")
+                fig2 = go.Figure()
+                if monthly_df['day_kwh'].notna().any():
+                    fig2.add_trace(go.Bar(
+                        x=labels, y=monthly_df['day_kwh'],
+                        name='Day', marker_color='#f59e0b',
+                    ))
+                if monthly_df['night_kwh'].notna().any():
+                    fig2.add_trace(go.Bar(
+                        x=labels, y=monthly_df['night_kwh'],
+                        name='Night', marker_color='#3b82f6',
+                    ))
+                if monthly_df['peak_kwh'].notna().any():
+                    fig2.add_trace(go.Bar(
+                        x=labels, y=monthly_df['peak_kwh'],
+                        name='Peak', marker_color='#ef4444',
+                    ))
+                fig2.update_layout(
+                    barmode='stack',
+                    xaxis_title="Month",
+                    yaxis_title="Consumption (kWh)",
+                    template="plotly_dark",
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(family="DM Sans", color="#e2e8f0"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+        kwh_col = 'kwh_per_day' if normalise else 'total_kwh'
+        summary_df = monthly_df.dropna(subset=[kwh_col])
+    else:
+        labels = df['label'].tolist()
+        if normalise:
+            y_vals = df['kwh_per_day']
+            y_title = "Consumption (kWh/day)"
+            fmt_fn = lambda v: f"{v:.1f}" if pd.notna(v) else ""
+        else:
+            y_vals = df['total_kwh']
+            y_title = "Consumption (kWh)"
+            fmt_fn = lambda v: f"{v:,.0f}" if pd.notna(v) else ""
+
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=y_vals,
+            name='kWh/day' if normalise else 'Total kWh',
+            marker_color='#4ade80',
+            text=[fmt_fn(v) for v in y_vals],
+            textposition='auto',
+        ))
+        fig.update_layout(
+            xaxis_title="Billing Period",
+            yaxis_title=y_title,
+            template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="DM Sans", color="#e2e8f0"),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Day/Night/Peak breakdown (raw only)
+        if not normalise:
+            has_breakdown = (
+                df['day_kwh'].notna().any()
+                or df['night_kwh'].notna().any()
+                or df['peak_kwh'].notna().any()
+            )
+            if has_breakdown:
+                st.markdown("#### Day/Night/Peak Breakdown")
+                fig2 = go.Figure()
+                if df['day_kwh'].notna().any():
+                    fig2.add_trace(go.Bar(
+                        x=labels, y=df['day_kwh'],
+                        name='Day', marker_color='#f59e0b',
+                    ))
+                if df['night_kwh'].notna().any():
+                    fig2.add_trace(go.Bar(
+                        x=labels, y=df['night_kwh'],
+                        name='Night', marker_color='#3b82f6',
+                    ))
+                if df['peak_kwh'].notna().any():
+                    fig2.add_trace(go.Bar(
+                        x=labels, y=df['peak_kwh'],
+                        name='Peak', marker_color='#ef4444',
+                    ))
+                fig2.update_layout(
+                    barmode='stack',
+                    xaxis_title="Billing Period",
+                    yaxis_title="Consumption (kWh)",
+                    template="plotly_dark",
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(family="DM Sans", color="#e2e8f0"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+        kwh_col = 'kwh_per_day' if normalise else 'total_kwh'
+        summary_df = df.dropna(subset=[kwh_col])
 
     # Consumption change summary
-    kwh_col = 'kwh_per_day' if normalise else 'total_kwh'
     unit = " kWh/day" if normalise else " kWh"
-    valid = df.dropna(subset=[kwh_col])
-    if len(valid) >= 2:
+    if len(summary_df) >= 2:
         st.divider()
-        first = valid.iloc[0][kwh_col]
-        last = valid.iloc[-1][kwh_col]
+        first = summary_df.iloc[0][kwh_col]
+        last = summary_df.iloc[-1][kwh_col]
         change = last - first
         change_pct = (change / first * 100) if first else 0
 
         fmt = ".1f" if normalise else ",.0f"
+        label_first = summary_df.iloc[0].get('month_label', 'First Bill') if show_monthly else 'First Bill'
+        label_last = summary_df.iloc[-1].get('month_label', 'Latest Bill') if show_monthly else 'Latest Bill'
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("First Bill", f"{first:{fmt}}{unit}")
+            st.metric(label_first, f"{first:{fmt}}{unit}")
         with col2:
-            st.metric("Latest Bill", f"{last:{fmt}}{unit}")
+            st.metric(label_last, f"{last:{fmt}}{unit}")
         with col3:
             st.metric("Change", f"{change:+{fmt}}{unit}", delta=f"{change_pct:+.1f}%")
 
@@ -1482,7 +1718,8 @@ with st.sidebar:
 
     bill_count = len(st.session_state.extracted_bills)
     success_count = sum(
-        1 for b in st.session_state.extracted_bills if b["status"] == "success"
+        1 for b in st.session_state.extracted_bills
+        if b["status"] in ("success", "manual")
     )
 
     st.markdown("### \U0001f4c4 Bill Extractor")
@@ -1492,7 +1729,7 @@ with st.sidebar:
         )
     else:
         st.caption(
-            "Upload electricity bills to extract costs, consumption, and rates."
+            "Upload energy bills to extract costs, consumption, and rates."
         )
 
     if bill_count > 0:
@@ -1510,12 +1747,12 @@ with st.sidebar:
 # =========================================================================
 
 st.markdown("## \U0001f4c4 Bill Extractor")
-st.caption("Upload electricity bills to extract costs, consumption, and rates")
+st.caption("Upload energy bills to extract costs, consumption, and rates")
 
 # Upload zone (main content area, not sidebar)
 _uploader_key = f"bill_uploader_{st.session_state.get('uploader_key', 0)}"
 uploaded_files = st.file_uploader(
-    "Upload electricity bills to extract costs, consumption, and rates",
+    "Upload energy bills to extract costs, consumption, and rates",
     type=['pdf', 'jpg', 'jpeg', 'png'],
     accept_multiple_files=True,
     help="Drag and drop or browse. Supports PDF, JPG, JPEG, PNG. Upload multiple files at once.",
@@ -1555,6 +1792,117 @@ if uploaded_files:
             )
         st.rerun()
 
+# --- Manual fuel entry ---
+with st.expander("\u270f\ufe0f Add Fuel Entry Manually", expanded=False):
+    st.caption(
+        "Enter solid fuel, kerosene, or LPG purchases for inclusion in "
+        "comparison and export."
+    )
+    _fuel_keys = list(FUEL_TYPES.keys())
+    _fuel_labels = [FUEL_TYPES[k]["display_name"] for k in _fuel_keys]
+    _valid_units_map = get_valid_fuel_units_map()
+
+    with st.form(key="manual_fuel_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            _mf_fuel_idx = st.selectbox(
+                "Fuel Type",
+                options=range(len(_fuel_keys)),
+                format_func=lambda i: _fuel_labels[i],
+                key="mf_fuel_type",
+            )
+            _mf_fuel_key = _fuel_keys[_mf_fuel_idx]
+            _mf_supplier = st.text_input(
+                "Supplier (optional)", key="mf_supplier",
+            )
+            _mf_quantity = st.number_input(
+                "Quantity", min_value=0.0, step=1.0, format="%.2f",
+                key="mf_quantity",
+            )
+        with col2:
+            _all_units = get_all_units()
+            _all_unit_labels = [UNIT_DISPLAY_NAMES.get(u, u) for u in _all_units]
+            _mf_unit_idx = st.selectbox(
+                "Unit",
+                options=range(len(_all_units)),
+                format_func=lambda i: _all_unit_labels[i],
+                key="mf_unit",
+            )
+            _mf_unit_key = _all_units[_mf_unit_idx]
+            _mf_cost = st.number_input(
+                "Total Cost (EUR incl. VAT)", min_value=0.0, step=1.0,
+                format="%.2f", key="mf_cost",
+            )
+            _mf_date = st.date_input("Date of Purchase", key="mf_date")
+            _mf_period_end = st.date_input(
+                "Period End (optional)", value=None, key="mf_period_end",
+            )
+
+        _mf_submitted = st.form_submit_button("Add Fuel Entry", type="primary")
+
+    if _mf_submitted:
+        _mf_errors = []
+        if _mf_quantity <= 0:
+            _mf_errors.append("Quantity must be greater than 0.")
+        if _mf_cost <= 0:
+            _mf_errors.append("Total cost must be greater than 0.")
+        if _mf_unit_key not in _valid_units_map.get(_mf_fuel_key, []):
+            valid_labels = [
+                UNIT_DISPLAY_NAMES.get(u, u)
+                for u in _valid_units_map[_mf_fuel_key]
+            ]
+            _mf_errors.append(
+                f"Unit '{UNIT_DISPLAY_NAMES.get(_mf_unit_key, _mf_unit_key)}' "
+                f"is not valid for {FUEL_TYPES[_mf_fuel_key]['display_name']}. "
+                f"Valid units: {', '.join(valid_labels)}"
+            )
+
+        if _mf_errors:
+            for err in _mf_errors:
+                st.error(err)
+        else:
+            _mf_kwh = convert_to_kwh(_mf_fuel_key, _mf_quantity, _mf_unit_key)
+            _mf_bill = BillData(
+                supplier=_mf_supplier.strip() or FUEL_TYPES[_mf_fuel_key]["display_name"],
+                fuel_type=_mf_fuel_key,
+                bill_date=_mf_date.strftime("%d %b %Y"),
+                billing_period_start=_mf_date.strftime("%d/%m/%Y"),
+                billing_period_end=(
+                    _mf_period_end.strftime("%d/%m/%Y") if _mf_period_end else None
+                ),
+                total_units_kwh=round(_mf_kwh, 2),
+                total_this_period=round(_mf_cost, 2),
+                extraction_method="manual_entry",
+                confidence_score=1.0,
+            )
+
+            _mf_hash = content_hash(
+                f"manual:{_mf_fuel_key}:{_mf_date}:{_mf_cost}:{_mf_quantity}".encode()
+            )
+            _mf_fuel_display = FUEL_TYPES[_mf_fuel_key]["display_name"]
+            _mf_unit_display = UNIT_DISPLAY_NAMES.get(_mf_unit_key, _mf_unit_key)
+            _mf_filename = (
+                f"{_mf_fuel_display} - {_mf_quantity:.1f} {_mf_unit_display} "
+                f"({_mf_date.strftime('%b %Y')})"
+            )
+
+            if _mf_hash not in st.session_state.processed_hashes:
+                st.session_state.extracted_bills.append({
+                    "filename": _mf_filename,
+                    "bill": _mf_bill,
+                    "raw_text": None,
+                    "confidence": 1.0,
+                    "content_hash": _mf_hash,
+                    "status": "manual",
+                    "supplier": _mf_bill.supplier,
+                    "field_count": 0,
+                    "error": None,
+                })
+                st.session_state.processed_hashes.add(_mf_hash)
+                st.rerun()
+            else:
+                st.warning("This exact entry already exists (duplicate detected).")
+
 # --- Status chips for processed bills ---
 bills = st.session_state.extracted_bills
 
@@ -1564,7 +1912,18 @@ if bills:
         'margin: 0.5rem 0 1rem 0;">'
     )
     for entry in bills:
-        if entry["status"] == "success":
+        if entry["status"] == "manual":
+            supplier = entry["supplier"] or "Manual"
+            chip_html += (
+                f'<div style="display: inline-flex; align-items: center; gap: 0.4rem; '
+                f'padding: 0.3rem 0.8rem; background: #1e2433; border: 1px solid #3b82f6; '
+                f'border-radius: 16px; font-size: 0.85rem;">'
+                f'<span style="color: #3b82f6;">&#9998;</span>'
+                f'<span style="color: #e2e8f0;">{entry["filename"]}</span>'
+                f'<span style="color: #94a3b8;">({supplier})</span>'
+                f'</div>'
+            )
+        elif entry["status"] == "success":
             supplier = entry["supplier"] or "Unknown"
             conf = round(entry["confidence"] * 100)
             if conf >= 80:
@@ -1601,7 +1960,8 @@ if bills:
 
 # --- Results area ---
 successful_bills = [
-    (b["bill"], b["filename"]) for b in bills if b["status"] == "success"
+    (b["bill"], b["filename"]) for b in bills
+    if b["status"] in ("success", "manual")
 ]
 # Stable index mapping: filename -> original position (for edit key lookup)
 _edit_indices = {fn: idx for idx, (_, fn) in enumerate(successful_bills)}
@@ -1623,7 +1983,7 @@ for entry in error_bills:
         suggestions = (
             '<ol class="suggestion-list">'
             '<li>Check the file is not password-protected</li>'
-            '<li>Ensure it is a valid electricity bill PDF</li>'
+            '<li>Ensure it is a valid bill PDF</li>'
             '<li>If scanned, ensure the text is legible</li>'
             '</ol>'
         )
@@ -1642,10 +2002,12 @@ for entry in error_bills:
 if len(successful_bills) == 1:
     # Single bill detail view
     bill, filename = successful_bills[0]
-    raw_text = next(
-        (b["raw_text"] for b in bills if b["filename"] == filename), None
-    )
-    show_bill_summary(bill, raw_text=raw_text)
+    _entry = next((b for b in bills if b["filename"] == filename), None)
+    if _entry and _entry["status"] == "manual":
+        _show_manual_entry_summary(bill)
+    else:
+        raw_text = _entry["raw_text"] if _entry else None
+        show_bill_summary(bill, raw_text=raw_text)
 
 elif len(successful_bills) >= 2:
     # Bill inclusion filter — allows excluding individual bills from comparison
@@ -1667,25 +2029,33 @@ elif len(successful_bills) >= 2:
         show_bill_comparison(filtered_bills, edit_indices=_edit_indices)
     elif len(filtered_bills) == 1:
         bill, filename = filtered_bills[0]
-        idx = _edit_indices[filename]
-        raw_text = next(
-            (b["raw_text"] for b in bills if b["filename"] == filename), None
-        )
-        show_bill_summary(bill, raw_text=raw_text, key_suffix=f"_{idx}")
+        _entry = next((b for b in bills if b["filename"] == filename), None)
+        if _entry and _entry["status"] == "manual":
+            _show_manual_entry_summary(bill)
+        else:
+            idx = _edit_indices[filename]
+            raw_text = _entry["raw_text"] if _entry else None
+            show_bill_summary(bill, raw_text=raw_text, key_suffix=f"_{idx}")
 
     # Individual bill details below (expandable)
     st.divider()
     st.subheader("Individual Bill Details")
     for idx, (bill, filename) in enumerate(successful_bills):
-        raw_text = next(
-            (b["raw_text"] for b in bills if b["filename"] == filename), None
-        )
+        _entry = next((b for b in bills if b["filename"] == filename), None)
         supplier_label = bill.supplier or "Unknown"
-        conf_pct = round(bill.confidence_score * 100)
-        with st.expander(
-            f"\U0001f4c4 {filename} \u2014 {supplier_label} ({conf_pct}%)"
-        ):
-            show_bill_summary(bill, raw_text=raw_text, key_suffix=f"_{idx}")
+        if _entry and _entry["status"] == "manual":
+            fuel_label = get_display_name(bill.fuel_type) if bill.fuel_type else "Fuel"
+            with st.expander(
+                f"\u270f\ufe0f {filename} \u2014 {fuel_label}"
+            ):
+                _show_manual_entry_summary(bill)
+        else:
+            raw_text = _entry["raw_text"] if _entry else None
+            conf_pct = round(bill.confidence_score * 100)
+            with st.expander(
+                f"\U0001f4c4 {filename} \u2014 {supplier_label} ({conf_pct}%)"
+            ):
+                show_bill_summary(bill, raw_text=raw_text, key_suffix=f"_{idx}")
 
 else:
     # Empty state — polished card
@@ -1693,7 +2063,7 @@ else:
         """
         <div class="empty-state-card">
             <div class="empty-icon">\U0001f4c4</div>
-            <h3>Upload Electricity Bills</h3>
+            <h3>Upload Energy Bills</h3>
             <p>
                 Drag and drop PDF or photographed bills above.<br>
                 Upload more at any time to compare across periods.

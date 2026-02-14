@@ -316,3 +316,78 @@ class TestStatusChipLogic:
         else:
             color = "#ef4444"
         assert color == "#ef4444"
+
+
+# ---------------------------------------------------------------------------
+# Manual entry dict structure and integration
+# ---------------------------------------------------------------------------
+
+class TestManualEntryStructure:
+    """Test that manual entry dicts match the expected structure."""
+
+    def _make_manual_entry(self) -> dict:
+        """Create a sample manual entry dict matching the page's format."""
+        bill = BillData(
+            supplier="Coal Supplier",
+            fuel_type="coal",
+            bill_date="14 Feb 2026",
+            billing_period_start="14/02/2026",
+            billing_period_end=None,
+            total_units_kwh=1628.0,
+            total_this_period=120.0,
+            extraction_method="manual_entry",
+            confidence_score=1.0,
+        )
+        return {
+            "filename": "Coal - 5.0 Bag (40kg) (Feb 2026)",
+            "bill": bill,
+            "raw_text": None,
+            "confidence": 1.0,
+            "content_hash": content_hash(b"manual:coal:2026-02-14:120:5"),
+            "status": "manual",
+            "supplier": bill.supplier,
+            "field_count": 0,
+            "error": None,
+        }
+
+    def test_manual_entry_has_all_keys(self):
+        """Manual entry should have the same keys as extracted bills."""
+        manual = self._make_manual_entry()
+        expected_keys = {
+            "filename", "bill", "raw_text", "confidence",
+            "content_hash", "status", "supplier", "field_count", "error",
+        }
+        assert set(manual.keys()) == expected_keys
+
+    def test_manual_entry_status(self):
+        manual = self._make_manual_entry()
+        assert manual["status"] == "manual"
+
+    def test_manual_entry_confidence_is_1(self):
+        manual = self._make_manual_entry()
+        assert manual["confidence"] == 1.0
+
+    def test_successful_bills_filter_includes_manual(self):
+        """The successful_bills filter should include manual entries."""
+        bills = [
+            {"filename": "a.pdf", "bill": BillData(supplier="Test"), "status": "success"},
+            self._make_manual_entry(),
+            {"filename": "bad.pdf", "bill": None, "status": "error", "error": "fail"},
+        ]
+        successful = [
+            (b["bill"], b["filename"]) for b in bills
+            if b["status"] in ("success", "manual")
+        ]
+        assert len(successful) == 2
+
+    def test_dedup_hash_deterministic(self):
+        """Same manual entry inputs should produce the same hash."""
+        h1 = content_hash(b"manual:coal:2026-02-14:120:5")
+        h2 = content_hash(b"manual:coal:2026-02-14:120:5")
+        assert h1 == h2
+
+    def test_dedup_hash_different_inputs(self):
+        """Different manual entry inputs should produce different hashes."""
+        h1 = content_hash(b"manual:coal:2026-02-14:120:5")
+        h2 = content_hash(b"manual:kerosene:2026-02-14:500:200")
+        assert h1 != h2

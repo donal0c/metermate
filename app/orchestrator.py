@@ -90,6 +90,7 @@ def _build_bill(
     bill = GenericBillData(
         provider=provider,
         mprn=get_val("mprn"),
+        gprn=get_val("gprn"),
         account_number=get_val("account_number"),
         invoice_number=get_val("invoice_number"),
         invoice_date=get_val("invoice_date"),

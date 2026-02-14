@@ -171,12 +171,14 @@ def _render_filter_bar(df: pd.DataFrame):
         st.session_state.date_filter_period = "All Data"
 
     # --- Date Range pill buttons ---
-    period_labels = ["All Data", "Last 7d", "Last 30d", "Last 90d", "Custom"]
+    period_labels = ["All Data", "Last 7d", "Last 30d", "Last 90d", "Last 6m", "Last 1y", "Custom"]
     period_map = {
         "All Data": "All Data",
         "Last 7d": "Last 7 Days",
         "Last 30d": "Last 30 Days",
         "Last 90d": "Last 90 Days",
+        "Last 6m": "Last 6 Months",
+        "Last 1y": "Last 12 Months",
         "Custom": "Custom Range",
     }
     # Reverse lookup for current state
@@ -229,6 +231,10 @@ def _render_filter_bar(df: pd.DataFrame):
         start_date = data_max - timedelta(days=29)
     elif period == "Last 90 Days":
         start_date = data_max - timedelta(days=89)
+    elif period == "Last 6 Months":
+        start_date = data_max - timedelta(days=182)
+    elif period == "Last 12 Months":
+        start_date = data_max - timedelta(days=364)
     elif period == "Custom Range":
         col1, col2, _ = st.columns([1, 1, 3])
         with col1:

@@ -1,10 +1,11 @@
 """
-Bill Parser - Irish Electricity Bill Data Extraction
-=====================================================
+Bill Parser - Irish Energy Bill Data Extraction
+=================================================
 
-Extracts structured data from Irish electricity bills (PDF format).
-Adapted from bill_extractor_prototype.py for integration with the
-Streamlit app (accepts bytes input from st.file_uploader).
+Extracts structured data from Irish energy bills (electricity, gas,
+heating oil) in PDF format. Adapted from bill_extractor_prototype.py
+for integration with the Streamlit app (accepts bytes input from
+st.file_uploader).
 
 Tested against Energia bills; designed to be extended for other suppliers.
 """
@@ -59,6 +60,9 @@ class GenericBillData:
     vat_rate: Optional[float] = None
     total_incl_vat: Optional[float] = None
 
+    # Fuel type (for manual solid fuel / heating oil entries)
+    fuel_type: Optional[str] = None
+
     # Metadata
     extraction_method: str = ""
     confidence_score: float = 0.0
@@ -98,7 +102,9 @@ def generic_to_legacy(generic: GenericBillData) -> "BillData":
 
     # --- Identity ---
     bill.supplier = generic.provider or None
+    bill.fuel_type = generic.fuel_type
     bill.mprn = generic.mprn
+    bill.gprn = generic.gprn
     bill.account_number = generic.account_number
     bill.invoice_number = generic.invoice_number
 
@@ -182,7 +188,7 @@ def generic_to_legacy(generic: GenericBillData) -> "BillData":
 
 @dataclass
 class BillData:
-    """Structured representation of an Irish electricity bill."""
+    """Structured representation of an Irish utility bill."""
     # Extraction metadata
     extraction_method: str = ""
     confidence_score: float = 0.0
@@ -190,11 +196,13 @@ class BillData:
 
     # Supplier
     supplier: Optional[str] = None
+    fuel_type: Optional[str] = None
 
     # Account / Identity
     customer_name: Optional[str] = None
     premises: Optional[str] = None
     mprn: Optional[str] = None
+    gprn: Optional[str] = None
     account_number: Optional[str] = None
     invoice_number: Optional[str] = None
     meter_number: Optional[str] = None

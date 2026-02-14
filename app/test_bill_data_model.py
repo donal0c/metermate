@@ -333,3 +333,29 @@ class TestGenericToLegacy:
         assert isinstance(d, dict)
         assert "supplier" in d
         assert "mprn" in d
+
+    def test_fuel_type_propagated(self):
+        """fuel_type should propagate from GenericBillData to BillData."""
+        g = GenericBillData(provider="Manual", fuel_type="kerosene")
+        bill = generic_to_legacy(g)
+        assert bill.fuel_type == "kerosene"
+
+    def test_fuel_type_none_by_default(self):
+        """fuel_type should default to None on both models."""
+        g = GenericBillData()
+        assert g.fuel_type is None
+        bill = BillData()
+        assert bill.fuel_type is None
+
+    def test_fuel_type_in_asdict(self):
+        """fuel_type should appear in asdict output."""
+        bill = BillData(supplier="Test", fuel_type="coal")
+        d = asdict(bill)
+        assert d["fuel_type"] == "coal"
+
+    def test_fuel_type_roundtrip(self):
+        """fuel_type should survive GenericBillData -> dict -> from_dict."""
+        g = GenericBillData(provider="Test", fuel_type="lpg")
+        d = g.to_dict()
+        g2 = GenericBillData.from_dict(d)
+        assert g2.fuel_type == "lpg"
