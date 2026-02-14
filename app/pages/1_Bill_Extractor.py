@@ -306,6 +306,22 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
             unsafe_allow_html=True,
         )
 
+    # --- Scanned bill warning (OCR is inherently less reliable) ---
+    method = getattr(bill, "extraction_method", "") or ""
+    if "tier2_spatial" in method or "tier0_scanned" in method:
+        scanned_color = "#f59e0b"
+        st.markdown(
+            f'<div data-testid="scanned-bill-warning" '
+            f'style="padding: 0.5rem 0.8rem; border-left: 3px solid {scanned_color}; '
+            f'background: rgba(245,158,11,0.08); border-radius: 0 4px 4px 0; '
+            f'margin-bottom: 0.8rem; color: #e2e8f0; font-size: 0.85rem;">'
+            f'<strong style="color: {scanned_color};">Scanned bill</strong> '
+            f'&mdash; Values were extracted via OCR and may contain errors. '
+            f'Please verify key figures (rates, consumption, totals) against '
+            f'the original document.</div>',
+            unsafe_allow_html=True,
+        )
+
     # --- Very low confidence: show extraction-failed card ---
     if confidence_pct < 40:
         st.markdown(
@@ -453,7 +469,7 @@ def show_bill_summary(bill: BillData, raw_text: str | None = None,
     if bill.standing_charge_total is not None:
         detail = ""
         if bill.standing_charge_days and bill.standing_charge_rate:
-            detail = f" ({bill.standing_charge_days} days at \u20ac{bill.standing_charge_rate}/day)"
+            detail = f" ({bill.standing_charge_days} days at \u20ac{bill.standing_charge_rate:.4f}/day)"
         line_items.append(("Standing Charge", f"\u20ac{bill.standing_charge_total:,.2f}{detail}"))
     if bill.pso_levy is not None:
         line_items.append(("PSO Levy", f"\u20ac{bill.pso_levy:,.2f}"))

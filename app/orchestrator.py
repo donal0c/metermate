@@ -34,6 +34,7 @@ from pipeline import (
     calculate_confidence,
     postprocess_vat_and_totals,
     postprocess_computed_costs,
+    postprocess_rates_fields,
     PROVIDER_BILL_TYPE,
 )
 from provider_configs import get_provider_config
@@ -380,6 +381,9 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
                     if fname not in extraction_fields:
                         extraction_fields[fname] = fval
 
+            # Sanity-check rates (divide by 100 if they look like cents)
+            rate_corrections = postprocess_rates_fields(extraction_fields)
+
             # Self-heal VAT/total fields using cross-field math
             computed_cost_corrections = postprocess_computed_costs(extraction_fields)
             vat_corrections = postprocess_vat_and_totals(extraction_fields)
@@ -422,7 +426,7 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
                 fields=extraction_fields,
                 field_count=len(extraction_fields),
                 hit_rate=spatial_result.hit_rate,
-                warnings=spatial_result.warnings + computed_cost_corrections + vat_corrections,
+                warnings=spatial_result.warnings + rate_corrections + computed_cost_corrections + vat_corrections,
             )
 
             extraction_method = " → ".join(extraction_path)

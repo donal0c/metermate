@@ -413,6 +413,38 @@ def _postprocess_rates(result: Tier3ExtractionResult) -> None:
             )
 
 
+def postprocess_rates_fields(
+    fields: dict[str, FieldExtractionResult],
+) -> list[str]:
+    """Sanity-check rate fields in a raw field dict; divide by 100 if cents.
+
+    Works on a plain field dict (unlike _postprocess_rates which needs a
+    Tier3ExtractionResult).  Returns a list of warning strings for any
+    adjusted fields.  Modifies *fields* in-place.
+    """
+    warnings: list[str] = []
+    for rate_field in _RATE_FIELDS:
+        fer = fields.get(rate_field)
+        if fer is None:
+            continue
+        rate_val = _safe_float(fer.value)
+        if rate_val is None:
+            continue
+        if rate_val > _RATE_MAX_EUR_PER_KWH:
+            adjusted = round(rate_val / 100.0, 4)
+            fields[rate_field] = FieldExtractionResult(
+                field_name=rate_field,
+                value=str(adjusted),
+                confidence=fer.confidence,
+                pattern_index=fer.pattern_index,
+            )
+            warnings.append(
+                f"{rate_field} adjusted from {rate_val} to {adjusted} "
+                f"EUR/kWh (was likely in cents)"
+            )
+    return warnings
+
+
 def _postprocess_computed_costs(result: Tier3ExtractionResult) -> None:
     """Compute missing cost fields from rate * consumption when both present.
 
@@ -1044,6 +1076,80 @@ def validate_cross_fields(
             message=f"VAT rate {vat_rate}% {'in range' if valid_rate else 'out of range [0, 23]'}",
         ))
 
+    # 6. Unit rate plausibility (Irish electricity: 0.05–1.00 EUR/kWh)
+    for rate_name in ("day_rate", "night_rate", "peak_rate"):
+        rate_val = _safe_float(
+            fields.get(rate_name, FieldExtractionResult("", "", 0, 0)).value
+        )
+        if rate_val is not None:
+            plausible = 0.01 <= rate_val <= 1.0
+            checks.append(ValidationCheck(
+                name=f"{rate_name}_range",
+                passed=plausible,
+                message=(
+                    f"{rate_name} {rate_val} EUR/kWh "
+                    f"{'plausible' if plausible else 'out of range [0.01, 1.0]'}"
+                ),
+            ))
+
+    # 7. Consumption plausibility (residential: 10–20,000 kWh per billing period)
+    for kwh_name in ("day_kwh", "night_kwh", "peak_kwh"):
+        kwh_val = _safe_float(
+            fields.get(kwh_name, FieldExtractionResult("", "", 0, 0)).value
+        )
+        if kwh_val is not None:
+            plausible = 0 <= kwh_val <= 20_000
+            checks.append(ValidationCheck(
+                name=f"{kwh_name}_range",
+                passed=plausible,
+                message=(
+                    f"{kwh_name} {kwh_val} kWh "
+                    f"{'plausible' if plausible else 'out of range [0, 20000]'}"
+                ),
+            ))
+
+    # 8. Cost consistency: rate * consumption ≈ cost (within 50%)
+    for cost_name, rate_name, kwh_name in _COST_TRIPLETS:
+        cost_val = _safe_float(
+            fields.get(cost_name, FieldExtractionResult("", "", 0, 0)).value
+        )
+        rate_val = _safe_float(
+            fields.get(rate_name, FieldExtractionResult("", "", 0, 0)).value
+        )
+        kwh_val = _safe_float(
+            fields.get(kwh_name, FieldExtractionResult("", "", 0, 0)).value
+        )
+        if cost_val is not None and rate_val is not None and kwh_val is not None:
+            if cost_val > 0 and kwh_val > 0 and rate_val > 0:
+                expected_cost = rate_val * kwh_val
+                ratio = expected_cost / cost_val if cost_val != 0 else float("inf")
+                consistent = 0.5 <= ratio <= 2.0
+                checks.append(ValidationCheck(
+                    name=f"{cost_name}_consistency",
+                    passed=consistent,
+                    message=(
+                        f"{rate_name}({rate_val}) * {kwh_name}({kwh_val}) = "
+                        f"{expected_cost:.2f}, actual {cost_name}={cost_val}, "
+                        f"ratio={ratio:.2f}"
+                    ),
+                ))
+
+    # 9. Standing charge plausibility (0.01–5.00 EUR/day, or total 0.50–500)
+    sc_val = _safe_float(
+        fields.get("standing_charge", FieldExtractionResult("", "", 0, 0)).value
+    )
+    if sc_val is not None:
+        # Standing charge can be a daily rate or a period total
+        plausible = 0.01 <= sc_val <= 500
+        checks.append(ValidationCheck(
+            name="standing_charge_range",
+            passed=plausible,
+            message=(
+                f"Standing charge {sc_val} "
+                f"{'plausible' if plausible else 'out of range [0.01, 500]'}"
+            ),
+        ))
+
     return checks
 
 
@@ -1163,10 +1269,22 @@ def calculate_confidence(
     # Weighted score
     score = field_coverage * 0.4 + validation_pass_rate * 0.4 + ocr_score * 0.2
 
+    # Plausibility gate: any failing range/consistency check caps the band
+    # so that bills with impossible values never show "High confidence".
+    _plausibility_checks = {
+        "day_rate_range", "night_rate_range", "peak_rate_range",
+        "day_kwh_range", "night_kwh_range", "peak_kwh_range",
+        "day_cost_consistency", "night_cost_consistency", "peak_cost_consistency",
+        "standing_charge_range",
+    }
+    has_plausibility_failure = any(
+        not c.passed for c in validation_checks if c.name in _plausibility_checks
+    )
+
     # Decision band
-    if score >= 0.85:
+    if score >= 0.85 and not has_plausibility_failure:
         band = "accept"
-    elif score >= 0.60:
+    elif score >= 0.60 or (score >= 0.85 and has_plausibility_failure):
         band = "accept_with_review"
     else:
         band = "escalate"

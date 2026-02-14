@@ -11,6 +11,7 @@ from pipeline import (
     ConfidenceResult,
     validate_cross_fields,
     calculate_confidence,
+    postprocess_rates_fields,
     extract_text_tier0,
     extract_with_config,
     FIELD_PROFILES,
@@ -151,6 +152,150 @@ class TestValidateCrossFields:
         checks = validate_cross_fields(fields)
         totals_check = next(c for c in checks if c.name == "totals_crosscheck")
         assert totals_check.passed is True
+
+
+# ===================================================================
+# Range validation (unit rates, consumption, cost consistency)
+# ===================================================================
+
+class TestRangeValidation:
+    """Tests for the plausibility checks added for steve-tpx."""
+
+    def test_normal_day_rate_passes(self):
+        fields = {"day_rate": _fr("day_rate", "0.15148")}
+        checks = validate_cross_fields(fields)
+        rate_check = next(c for c in checks if c.name == "day_rate_range")
+        assert rate_check.passed is True
+
+    def test_absurd_day_rate_fails(self):
+        """Rate of 234 EUR/kWh is clearly an OCR error."""
+        fields = {"day_rate": _fr("day_rate", "234.56")}
+        checks = validate_cross_fields(fields)
+        rate_check = next(c for c in checks if c.name == "day_rate_range")
+        assert rate_check.passed is False
+
+    def test_rate_in_cents_fails(self):
+        """15.148 looks like cents (should be 0.15148)."""
+        fields = {"day_rate": _fr("day_rate", "15.148")}
+        checks = validate_cross_fields(fields)
+        rate_check = next(c for c in checks if c.name == "day_rate_range")
+        assert rate_check.passed is False
+
+    def test_night_rate_boundary(self):
+        """Rate at exactly 1.0 should pass (upper bound inclusive)."""
+        fields = {"night_rate": _fr("night_rate", "1.0")}
+        checks = validate_cross_fields(fields)
+        rate_check = next(c for c in checks if c.name == "night_rate_range")
+        assert rate_check.passed is True
+
+    def test_normal_consumption_passes(self):
+        fields = {"day_kwh": _fr("day_kwh", "242")}
+        checks = validate_cross_fields(fields)
+        kwh_check = next(c for c in checks if c.name == "day_kwh_range")
+        assert kwh_check.passed is True
+
+    def test_absurd_consumption_fails(self):
+        """25,000 kWh in a billing period is implausible for residential."""
+        fields = {"day_kwh": _fr("day_kwh", "25000")}
+        checks = validate_cross_fields(fields)
+        kwh_check = next(c for c in checks if c.name == "day_kwh_range")
+        assert kwh_check.passed is False
+
+    def test_zero_consumption_passes(self):
+        """Zero consumption is valid (empty property)."""
+        fields = {"day_kwh": _fr("day_kwh", "0")}
+        checks = validate_cross_fields(fields)
+        kwh_check = next(c for c in checks if c.name == "day_kwh_range")
+        assert kwh_check.passed is True
+
+    def test_cost_consistency_good(self):
+        """rate * kwh ≈ cost should pass."""
+        fields = {
+            "day_rate": _fr("day_rate", "0.15"),
+            "day_kwh": _fr("day_kwh", "1000"),
+            "day_cost": _fr("day_cost", "150.00"),
+        }
+        checks = validate_cross_fields(fields)
+        cost_check = next(c for c in checks if c.name == "day_cost_consistency")
+        assert cost_check.passed is True
+
+    def test_cost_consistency_bad(self):
+        """rate * kwh wildly different from cost should fail."""
+        fields = {
+            "day_rate": _fr("day_rate", "234.56"),  # OCR error
+            "day_kwh": _fr("day_kwh", "12"),         # OCR error
+            "day_cost": _fr("day_cost", "1139.75"),
+        }
+        checks = validate_cross_fields(fields)
+        cost_check = next(c for c in checks if c.name == "day_cost_consistency")
+        assert cost_check.passed is False
+
+    def test_standing_charge_normal_passes(self):
+        fields = {"standing_charge": _fr("standing_charge", "28.88")}
+        checks = validate_cross_fields(fields)
+        sc_check = next(c for c in checks if c.name == "standing_charge_range")
+        assert sc_check.passed is True
+
+    def test_standing_charge_absurd_fails(self):
+        fields = {"standing_charge": _fr("standing_charge", "5000.00")}
+        checks = validate_cross_fields(fields)
+        sc_check = next(c for c in checks if c.name == "standing_charge_range")
+        assert sc_check.passed is False
+
+    def test_scanned_bill_with_bad_values_lower_confidence(self):
+        """Key scenario: scanned bill with OCR garbage should NOT score 'accept'."""
+        fields = {
+            "mprn": _fr("mprn", "10306802505"),
+            "account_number": _fr("account_number", "8386744600"),
+            "billing_period": _fr("billing_period", "01/11/2025 - 01/01/2026"),
+            "day_kwh": _fr("day_kwh", "12"),          # OCR error (should be ~2912)
+            "day_rate": _fr("day_rate", "234.56"),     # OCR error (should be ~0.234)
+            "day_cost": _fr("day_cost", "1139.75"),
+            "standing_charge": _fr("standing_charge", "28.88"),
+            "subtotal": _fr("subtotal", "1483.66"),
+            "vat_rate": _fr("vat_rate", "9"),
+            "vat_amount": _fr("vat_amount", "133.53"),
+            "total_incl_vat": _fr("total_incl_vat", "1617.19"),
+        }
+        result = calculate_confidence(fields, avg_ocr_confidence=92)
+        # With the new range + consistency checks, this should NOT be "accept"
+        assert result.band != "accept", (
+            f"Scanned bill with garbage OCR values scored {result.score:.2f} "
+            f"({result.band}) - should not be 'accept'"
+        )
+
+    def test_good_bill_still_accepts(self):
+        """Ensure the new checks don't regress good bills."""
+        fields = _good_electricity_fields()
+        result = calculate_confidence(fields, provider="Energia")
+        assert result.band == "accept", (
+            f"Good bill scored {result.score:.2f} ({result.band})"
+        )
+
+
+class TestPostprocessRatesFields:
+    """Tests for the public postprocess_rates_fields() function."""
+
+    def test_rate_in_cents_gets_divided(self):
+        fields = {"day_rate": _fr("day_rate", "15.148")}
+        warnings = postprocess_rates_fields(fields)
+        assert len(warnings) == 1
+        assert "adjusted" in warnings[0]
+        assert float(fields["day_rate"].value) == pytest.approx(0.1515, abs=0.001)
+
+    def test_normal_rate_untouched(self):
+        fields = {"day_rate": _fr("day_rate", "0.15148")}
+        warnings = postprocess_rates_fields(fields)
+        assert len(warnings) == 0
+        assert fields["day_rate"].value == "0.15148"
+
+    def test_multiple_rate_fields(self):
+        fields = {
+            "day_rate": _fr("day_rate", "23.456"),
+            "night_rate": _fr("night_rate", "12.34"),
+        }
+        warnings = postprocess_rates_fields(fields)
+        assert len(warnings) == 2
 
 
 # ===================================================================
