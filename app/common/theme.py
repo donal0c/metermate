@@ -261,6 +261,7 @@ _THEME_CSS = """
     }
 
     .workflow-card .card-arrow {
+        color: #4ade80 !important;
         opacity: 0.5;
         transition: opacity 0.2s ease, transform 0.2s ease;
     }
