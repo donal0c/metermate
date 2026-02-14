@@ -222,13 +222,21 @@ class TestESBNetworksIntegration:
 
     def test_subtotal_extracted(self, result):
         assert result.bill.subtotal is not None
-        assert abs(result.bill.subtotal - 7031.09) <= 0.02
+        assert abs(result.bill.subtotal - 2124.47) <= 0.02
 
     def test_vat_extracted(self, result):
         assert result.bill.vat_rate is not None
         assert abs(result.bill.vat_rate - 9.0) <= 0.1
         assert result.bill.vat_amount is not None
-        assert abs(result.bill.vat_amount - 780.83) <= 0.02
+        assert abs(result.bill.vat_amount - 191.21) <= 0.02
+
+    def test_total_extracted(self, result):
+        assert result.bill.total_incl_vat is not None
+        assert abs(result.bill.total_incl_vat - 2315.68) <= 0.02
+
+    def test_esb_totals_consistent(self, result):
+        warnings_text = "\n".join(result.bill.warnings).lower()
+        assert "totals_crosscheck" not in warnings_text
 
     def test_confidence_acceptable(self, result):
         assert result.confidence.score >= 0.60

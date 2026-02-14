@@ -364,6 +364,9 @@ ESB_NETWORKS_CONFIG = {
         },
         "subtotal": {
             "patterns": [
+                # Account summary block on page 1:
+                # "Balance brought forward ... Charges €2124.47"
+                (r"Balance\s+brought\s+forward", r"Charges\s+[€\u20ac]?([\d,]+\.\d{2})"),
                 (None, r"Total\s+electricity\s+charges\s+([\d,.]+)"),
             ],
             "confidence": 0.85,
@@ -377,6 +380,9 @@ ESB_NETWORKS_CONFIG = {
         },
         "vat_amount": {
             "patterns": [
+                # Account summary block on page 1:
+                # "Balance brought forward ... VAT €191.21"
+                (r"Balance\s+brought\s+forward", r"VAT\s+[€\u20ac]?([\d,]+\.\d{2})"),
                 (None, r"VAT\s+(\d+\.\d+)\s+\d+%"),
             ],
             "confidence": 0.90,

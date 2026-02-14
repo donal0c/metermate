@@ -45,14 +45,15 @@
         "account_number": "903921399",
         "invoice_number": "1908831521",
         "billing_period": "29 Feb 24 - 30 Apr 24",
-        "subtotal": "7031.09",
+        "subtotal": "2124.47",
         "vat_rate": "9",
-        "vat_amount": "780.83",
+        "vat_amount": "191.21",
+        "total_incl_vat": "2315.68",
         "mcc_code": "06",
         "dg_code": "DG6"
       },
-      "not_applicable": ["gprn", "litres", "unit_price", "total_incl_vat"],
-      "notes": "ESB total_incl_vat (2315.68) represents net balance after payments, not subtotal+VAT. Excluded from totals crosscheck."
+      "not_applicable": ["gprn", "litres", "unit_price"],
+      "notes": "Use account summary block values (Charges/VAT/Total due) for billing comparison. Detailed section includes other transactional lines that can inflate subtotal/VAT if used directly."
     },
     {
       "filename": "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf",
