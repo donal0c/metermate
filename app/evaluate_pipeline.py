@@ -29,11 +29,12 @@ import sys
 # Ensure app/ is on the path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from orchestrator import extract_bill_pipeline, PipelineResult
+from orchestrator import extract_bill_pipeline, extract_bill_from_image, PipelineResult
 
 
 GROUND_TRUTH_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "ground_truth.json")
 BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 
 
 def load_ground_truth() -> dict:
@@ -44,6 +45,23 @@ def load_ground_truth() -> dict:
 def _normalize_value(val: str) -> str:
     """Normalize a value for comparison."""
     return val.strip().replace(",", "").lower()
+
+
+def _normalize_date(val: str) -> str | None:
+    """Try to normalise a date string to YYYY-MM-DD for comparison."""
+    import re
+    from datetime import datetime
+
+    val = val.strip()
+    for fmt in (
+        "%d/%m/%y", "%d/%m/%Y", "%d %B %Y", "%d %b %y", "%d %b %Y",
+        "%Y-%m-%d", "%Y-%d-%m",
+    ):
+        try:
+            return datetime.strptime(val, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
 
 
 def _values_match(expected: str, actual: str, tolerance: float = 0.02) -> bool:
@@ -60,7 +78,16 @@ def _values_match(expected: str, actual: str, tolerance: float = 0.02) -> bool:
         pass
 
     # String comparison (case-insensitive, whitespace-stripped)
-    return e_norm == a_norm
+    if e_norm == a_norm:
+        return True
+
+    # Date comparison: normalise both to YYYY-MM-DD
+    e_date = _normalize_date(expected)
+    a_date = _normalize_date(actual)
+    if e_date is not None and a_date is not None:
+        return e_date == a_date
+
+    return False
 
 
 def _get_extraction_fields(pipeline_result: PipelineResult) -> dict:
@@ -89,6 +116,15 @@ def _get_extraction_fields(pipeline_result: PipelineResult) -> dict:
     elif pipeline_result.tier2 is not None:
         fields.update(pipeline_result.tier2.fields)
 
+    # Tier 4 LLM fields: the orchestrator merges these with existing fields
+    # using merge_llm_with_existing(prefer_llm=True) because tier4 only
+    # runs when confidence was "escalate" (existing extraction unreliable).
+    if pipeline_result.tier4 is not None:
+        from llm_extraction import merge_llm_with_existing
+        fields = merge_llm_with_existing(
+            pipeline_result.tier4.fields, fields, prefer_llm=True,
+        )
+
     # If neither tier produced fields the pipeline still ran but found
     # nothing -- return the empty dict so every expected field shows as
     # missing.
@@ -107,18 +143,28 @@ def evaluate_fixture(fixture: dict) -> dict:
     expected_provider = fixture["provider"]
     expected = fixture["expected"]
     not_applicable = set(fixture.get("not_applicable", []))
+    input_type = fixture.get("input_type", "pdf")
+    location = fixture.get("location", "Steve_bills")
 
-    pdf_path = os.path.join(BILLS_DIR, filename)
-    if not os.path.exists(pdf_path):
+    # Resolve file path based on location
+    if location == "root":
+        file_path = os.path.join(ROOT_DIR, filename)
+    else:
+        file_path = os.path.join(BILLS_DIR, filename)
+
+    if not os.path.exists(file_path):
         return {
             "filename": filename,
             "provider": expected_provider,
             "status": "skipped",
-            "reason": f"PDF not found: {pdf_path}",
+            "reason": f"File not found: {file_path}",
         }
 
     # Run the FULL orchestrator pipeline end-to-end
-    pipeline_result = extract_bill_pipeline(pdf_path)
+    if input_type == "image":
+        pipeline_result = extract_bill_from_image(file_path)
+    else:
+        pipeline_result = extract_bill_pipeline(file_path)
 
     # Collect the fields that the pipeline actually produced
     extraction_fields = _get_extraction_fields(pipeline_result)

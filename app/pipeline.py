@@ -131,7 +131,7 @@ PROVIDER_KEYWORDS: dict[str, list[str]] = {
     "SSE Airtricity": ["sse airtricity", "airtricity", "sseairtricity.com"],
     "Bord Gais": ["bord gáis", "bord gais", "bordgais", "bordgaisenergy.ie"],
     "Kerry Petroleum": ["kerry petroleum"],
-    "Energia": ["energia", "energia.ie"],
+    "Energia": ["energia", "energia.ie", "632 6035", "generali building"],
     "ESB Networks": ["esb networks", "esb network"],
     "Go Power": ["go power", "gopower", "gopower.ie"],
     "Flogas": ["flogas", "flogas.ie"],
@@ -144,6 +144,15 @@ PROVIDER_KEYWORDS: dict[str, list[str]] = {
     "Iberdrola": ["iberdrola"],
     "Yuno Energy": ["yuno", "yunoenergy.ie"],
 }
+
+_WORD_CHARS = r"a-z0-9"
+
+
+def _keyword_pattern(keyword: str) -> str:
+    """Build a conservative pattern for provider keyword matching."""
+    escaped = re.escape(keyword.lower())
+    escaped = escaped.replace(r"\ ", r"\s+")
+    return rf"(?<![{_WORD_CHARS}]){escaped}(?![{_WORD_CHARS}])"
 
 
 @dataclass
@@ -195,34 +204,37 @@ def detect_provider(text: str) -> ProviderDetectionResult:
     best_keyword: str | None = None
 
     for provider, keywords in PROVIDER_KEYWORDS.items():
-        kws_lower = [kw.lower() for kw in keywords]
-
-        # First pass: find which keywords actually match
-        matched_kws = [(kw, kws_lower[i]) for i, kw in enumerate(keywords)
-                       if kws_lower[i] in text_lower]
+        # First pass: find which keywords actually match using bounded regex
+        matched_kws: list[tuple[str, int]] = []
+        for kw in keywords:
+            pattern = _keyword_pattern(kw)
+            count = len(re.findall(pattern, text_lower))
+            if count > 0:
+                matched_kws.append((kw, count))
         if not matched_kws:
             continue
 
         # Second pass: remove keywords that are substrings of another
         # matched keyword (only suppress if the longer one is also matched)
-        filtered: list[tuple[str, str]] = []
-        for orig, kw_low in matched_kws:
+        filtered: list[tuple[str, int]] = []
+        for orig, count in matched_kws:
+            kw_low = orig.lower()
             suppressed = any(
-                kw_low in other_low and kw_low != other_low
-                for _, other_low in matched_kws
+                kw_low in other_orig.lower() and kw_low != other_orig.lower()
+                for other_orig, _ in matched_kws
             )
             if not suppressed:
-                filtered.append((orig, kw_low))
+                filtered.append((orig, count))
 
         # If filtering removed everything (all are substrings of each other),
         # keep the longest
         if not filtered:
-            filtered = [max(matched_kws, key=lambda x: len(x[1]))]
+            filtered = [max(matched_kws, key=lambda x: len(x[0]))]
 
-        provider_score = sum(text_lower.count(kw_low) for _, kw_low in filtered)
+        provider_score = sum(count for _, count in filtered)
         longest_orig = max(filtered, key=lambda x: len(x[0]))[0]
 
-        # Strictly greater — ties broken by dict insertion order (priority)
+        # Strictly greater — ties broken by dict insertion order (priority).
         if provider_score > best_score:
             best_score = provider_score
             best_provider = provider
@@ -373,8 +385,7 @@ def _postprocess_rates(result: Tier3ExtractionResult) -> None:
 def _postprocess_computed_costs(result: Tier3ExtractionResult) -> None:
     """Compute missing cost fields from rate * consumption when both present.
 
-    Computed fields get a reduced confidence (0.70) and are flagged with
-    '(calculated)' appended so the display layer can distinguish them.
+    Computed fields get a reduced confidence (0.70).
     Modifies *result* in-place.
     """
     for cost_field, rate_field, kwh_field in _COST_TRIPLETS:
@@ -400,7 +411,7 @@ def _postprocess_computed_costs(result: Tier3ExtractionResult) -> None:
         computed_cost = round(rate_val * kwh_val, 2)
         result.fields[cost_field] = FieldExtractionResult(
             field_name=cost_field,
-            value=f"{computed_cost:.2f} (calculated)",
+            value=f"{computed_cost:.2f}",
             confidence=0.70,
             pattern_index=-1,  # sentinel: not from a regex pattern
         )
@@ -411,6 +422,112 @@ def _postprocess_computed_costs(result: Tier3ExtractionResult) -> None:
         # Update field count
         if existing is None:
             result.field_count += 1
+
+
+def postprocess_computed_costs(
+    fields: dict[str, FieldExtractionResult],
+) -> list[str]:
+    """Compute missing day/night/peak costs directly on a field dict."""
+    corrections: list[str] = []
+    for cost_field, rate_field, kwh_field in _COST_TRIPLETS:
+        existing = fields.get(cost_field)
+        existing_val = _safe_float(existing.value) if existing is not None else None
+        if existing_val is not None and existing_val > 0:
+            continue
+
+        rate_fer = fields.get(rate_field)
+        kwh_fer = fields.get(kwh_field)
+        if rate_fer is None or kwh_fer is None:
+            continue
+
+        rate_val = _safe_float(rate_fer.value)
+        kwh_val = _safe_float(kwh_fer.value)
+        if rate_val is None or kwh_val is None:
+            continue
+        if rate_val <= 0 or kwh_val <= 0:
+            continue
+
+        computed_cost = round(rate_val * kwh_val, 2)
+        fields[cost_field] = FieldExtractionResult(
+            field_name=cost_field,
+            value=f"{computed_cost:.2f}",
+            confidence=0.70,
+            pattern_index=-1,
+        )
+        corrections.append(
+            f"{cost_field} computed as {rate_field}({rate_val}) * "
+            f"{kwh_field}({kwh_val}) = {computed_cost:.2f}"
+        )
+    return corrections
+
+
+def postprocess_vat_and_totals(fields: dict[str, FieldExtractionResult]) -> list[str]:
+    """Self-heal VAT and total fields using cross-field math.
+
+    When subtotal and vat_rate are both present with reasonable values,
+    this function can:
+      - Recompute vat_amount if it fails the math check
+      - Compute total_incl_vat from subtotal + vat_amount
+      - Compute subtotal from total_incl_vat - vat_amount
+
+    Returns list of correction messages (for warnings).
+    Modifies *fields* in-place.
+    """
+    corrections: list[str] = []
+
+    subtotal = _safe_float(fields.get("subtotal", FieldExtractionResult("", "", 0, 0)).value)
+    vat_rate = _safe_float(fields.get("vat_rate", FieldExtractionResult("", "", 0, 0)).value)
+    vat_amount = _safe_float(fields.get("vat_amount", FieldExtractionResult("", "", 0, 0)).value)
+    total = _safe_float(fields.get("total_incl_vat", FieldExtractionResult("", "", 0, 0)).value)
+
+    # Correct vat_amount when subtotal and vat_rate are available
+    if subtotal is not None and vat_rate is not None and 0 < vat_rate <= 23:
+        expected_vat = round(subtotal * vat_rate / 100.0, 2)
+
+        if vat_amount is not None and expected_vat > 0:
+            # Only correct when the relative error is very large (>100%),
+            # indicating an OCR misread rather than a complex bill structure
+            # with credits, split VAT lines, or different VAT bases.
+            relative_error = abs(expected_vat - vat_amount) / expected_vat
+            if relative_error > 1.0:
+                fields["vat_amount"] = FieldExtractionResult(
+                    field_name="vat_amount",
+                    value=f"{expected_vat:.2f}",
+                    confidence=0.75,
+                    pattern_index=-1,
+                )
+                corrections.append(
+                    f"vat_amount corrected from {vat_amount} to {expected_vat:.2f} "
+                    f"(subtotal {subtotal} * {vat_rate}%, relative error {relative_error:.0%})"
+                )
+                vat_amount = expected_vat
+        elif vat_amount is None:
+            # Compute missing vat_amount
+            fields["vat_amount"] = FieldExtractionResult(
+                field_name="vat_amount",
+                value=f"{expected_vat:.2f}",
+                confidence=0.70,
+                pattern_index=-1,
+            )
+            corrections.append(
+                f"vat_amount computed as subtotal({subtotal}) * {vat_rate}% = {expected_vat:.2f}"
+            )
+            vat_amount = expected_vat
+
+    # Compute total if missing but subtotal + vat available
+    if total is None and subtotal is not None and vat_amount is not None:
+        computed_total = round(subtotal + vat_amount, 2)
+        fields["total_incl_vat"] = FieldExtractionResult(
+            field_name="total_incl_vat",
+            value=f"{computed_total:.2f}",
+            confidence=0.70,
+            pattern_index=-1,
+        )
+        corrections.append(
+            f"total_incl_vat computed as subtotal({subtotal}) + vat({vat_amount}) = {computed_total:.2f}"
+        )
+
+    return corrections
 
 
 # ---- Core extraction engine ----
@@ -807,7 +924,14 @@ def _safe_float(value: str | None) -> float | None:
     if value is None:
         return None
     try:
-        return float(value.replace(",", ""))
+        cleaned = str(value).strip()
+        if not cleaned:
+            return None
+        cleaned = cleaned.split("(", 1)[0].strip()
+        cleaned = re.sub(r"[^\d.\-]", "", cleaned.replace(",", ""))
+        if cleaned in {"", "-", ".", "-."}:
+            return None
+        return float(cleaned)
     except (ValueError, AttributeError):
         return None
 

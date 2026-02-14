@@ -54,6 +54,7 @@ def parse_bill_date(date_str: str | None):
     formats = [
         "%d/%m/%Y", "%d %b %Y", "%d %B %Y", "%d.%m.%Y",
         "%Y-%m-%d", "%d-%m-%Y",
+        "%d/%m/%y", "%d-%m-%y", "%d.%m.%y", "%d %b %y", "%d %B %y",
     ]
     for fmt in formats:
         try:

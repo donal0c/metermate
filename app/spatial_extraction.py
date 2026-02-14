@@ -16,6 +16,7 @@ Flow:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -236,6 +237,10 @@ def _pick_best_rotation(img, pytesseract) -> "Image.Image":
     candidates = [(0, img)]
     rotated_90 = img.rotate(90, expand=True)
     candidates.append((90, rotated_90))
+    rotated_180 = img.rotate(180, expand=True)
+    candidates.append((180, rotated_180))
+    rotated_270 = img.rotate(270, expand=True)
+    candidates.append((270, rotated_270))
 
     best_img = img
     best_score = -1
@@ -290,10 +295,25 @@ def get_ocr_dataframe(
         images = [img]
     else:
         from pdf2image import convert_from_bytes, convert_from_path
+        max_pages_raw = os.environ.get("SPATIAL_MAX_PAGES", "").strip()
+        max_pages: int | None = None
+        if max_pages_raw:
+            try:
+                parsed_max = int(max_pages_raw)
+                if parsed_max > 0:
+                    max_pages = parsed_max
+            except ValueError:
+                max_pages = None
+
+        convert_kwargs = {"dpi": 300}
+        if max_pages is not None:
+            convert_kwargs["first_page"] = 1
+            convert_kwargs["last_page"] = max_pages
+
         if isinstance(source, str):
-            images = convert_from_path(source, dpi=300)
+            images = convert_from_path(source, **convert_kwargs)
         else:
-            images = convert_from_bytes(source, dpi=300)
+            images = convert_from_bytes(source, **convert_kwargs)
 
     all_rows: list[pd.DataFrame] = []
 

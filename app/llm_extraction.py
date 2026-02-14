@@ -121,6 +121,17 @@ def _get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
+def _get_genai_types():
+    """Import google.genai types with graceful fallback error."""
+    try:
+        from google.genai import types
+    except ImportError:
+        raise RuntimeError(
+            "google-genai package not installed. Run: pip install google-genai"
+        )
+    return types
+
+
 def _image_bytes_from_pdf(source: bytes | str, page_num: int = 0) -> bytes:
     """Convert a single PDF page to JPEG bytes for vision API."""
     from pdf2image import convert_from_path, convert_from_bytes
@@ -303,8 +314,13 @@ def extract_tier4_llm(
     Raises:
         RuntimeError: If API key not set or google-genai not installed.
     """
-    from google.genai import types
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise RuntimeError(
+            "GEMINI_API_KEY environment variable not set. "
+            "Set it to your Google AI Studio API key."
+        )
 
+    types = _get_genai_types()
     client = _get_gemini_client()
     warnings: list[str] = []
 
@@ -313,8 +329,35 @@ def extract_tier4_llm(
         image_bytes, mime_type = _image_bytes_from_file(source)
     else:
         try:
-            image_bytes = _image_bytes_from_pdf(source, page_num=0)
+            max_pages_raw = os.environ.get("LLM_MAX_PDF_PAGES", "3").strip()
+            try:
+                max_pages = max(1, int(max_pages_raw))
+            except ValueError:
+                max_pages = 3
+
+            page_count = 1
+            try:
+                import pymupdf
+                if isinstance(source, str):
+                    with pymupdf.open(source) as doc:
+                        page_count = max(1, doc.page_count)
+                else:
+                    with pymupdf.open(stream=source, filetype="pdf") as doc:
+                        page_count = max(1, doc.page_count)
+            except Exception:
+                page_count = 1
+
+            page_limit = min(page_count, max_pages)
+            image_bytes_list = [
+                _image_bytes_from_pdf(source, page_num=i)
+                for i in range(page_limit)
+            ]
+            image_bytes = image_bytes_list[0]
             mime_type = "image/jpeg"
+            if page_count > page_limit:
+                warnings.append(
+                    f"LLM PDF context truncated to first {page_limit} of {page_count} pages"
+                )
         except Exception as e:
             log.warning("PDF to image conversion failed: %s", e)
             return Tier4ExtractionResult(
@@ -325,19 +368,35 @@ def extract_tier4_llm(
 
     # Call Gemini with structured output
     try:
+        content_parts = []
+        if is_image:
+            content_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+        else:
+            for page_img in image_bytes_list:
+                content_parts.append(types.Part.from_bytes(data=page_img, mime_type=mime_type))
+
+        if not is_image and len(content_parts) > 1:
+            _EXTRACTION_PROMPT_MULTI = _EXTRACTION_PROMPT + (
+                "\nThe bill spans multiple pages. Combine fields across all pages; "
+                "prefer totals from final summary sections when duplicates exist."
+            )
+            prompt = _EXTRACTION_PROMPT_MULTI
+        else:
+            prompt = _EXTRACTION_PROMPT
+
         response = client.models.generate_content(
             model=model,
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                _EXTRACTION_PROMPT,
-            ],
+            contents=[*content_parts, prompt],
             config={
                 "response_mime_type": "application/json",
                 "response_schema": LLMBillSchema,
             },
         )
 
-        parsed = LLMBillSchema.model_validate_json(response.text)
+        response_text = response.text
+        if not response_text:
+            response_text = "{}"
+        parsed = LLMBillSchema.model_validate_json(response_text)
     except Exception as e:
         log.warning("Gemini extraction failed: %s", e)
         return Tier4ExtractionResult(
@@ -384,6 +443,7 @@ def _values_equivalent(val1: str, val2: str) -> bool:
 def merge_llm_with_existing(
     llm_fields: dict[str, FieldExtractionResult],
     existing_fields: dict[str, FieldExtractionResult],
+    prefer_llm: bool = False,
 ) -> dict[str, FieldExtractionResult]:
     """Merge LLM extraction results with existing regex/spatial results.
 
@@ -391,12 +451,16 @@ def merge_llm_with_existing(
       - If only one source found it: use that source
       - If both agree: boost confidence (+0.1, capped at 1.0)
       - If they disagree:
-          - Prefer LLM for text fields (provider, addresses, dates)
-          - Prefer regex for numeric fields (amounts, rates)
+          - When prefer_llm=False (default): prefer regex for numeric fields
+          - When prefer_llm=True (escalation): prefer LLM for all fields
+            since we're in the escalation path because existing extraction
+            was unreliable.
 
     Args:
         llm_fields: Fields from Tier 4 LLM extraction.
         existing_fields: Fields from Tier 2/3 regex/spatial extraction.
+        prefer_llm: When True, prefer LLM for ALL disagreements (used in
+            escalation path where existing extraction has low confidence).
 
     Returns:
         Merged dict of FieldExtractionResult.
@@ -421,8 +485,8 @@ def merge_llm_with_existing(
                     pattern_index=existing.pattern_index,
                 )
             else:
-                # Disagree: choose based on field type
-                if field_name in _LLM_PREFERRED_FIELDS:
+                # Disagree: choose based on context
+                if prefer_llm or field_name in _LLM_PREFERRED_FIELDS:
                     merged[field_name] = llm_field
                 else:
                     # Keep existing (regex/spatial) for numeric and other fields

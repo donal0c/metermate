@@ -1,8 +1,9 @@
 {
   "_meta": {
     "description": "Ground-truth expected values for pipeline accuracy evaluation",
-    "version": 1,
+    "version": 2,
     "created": "2026-02-11",
+    "updated": "2026-02-13",
     "scoring_spec": {
       "critical_fields": ["mprn", "account_number", "subtotal", "vat_rate", "vat_amount", "total_incl_vat"],
       "critical_weight": 2.0,
@@ -25,14 +26,15 @@
         "mprn": "10006002900",
         "account_number": "BIS007",
         "day_kwh": "4540",
-        "day_rate": "12.2700",
+        "day_rate": "0.1227",
         "standing_charge": "10.90",
         "subtotal": "1252.14",
         "vat_rate": "9",
         "vat_amount": "112.69",
         "total_incl_vat": "1364.83"
       },
-      "not_applicable": ["night_kwh", "night_rate", "night_cost", "invoice_number", "gprn", "litres", "unit_price"]
+      "not_applicable": ["night_kwh", "night_rate", "night_cost", "invoice_number", "gprn", "litres", "unit_price"],
+      "notes": "day_rate normalised to EUR/kWh (pipeline converts from cents via cents_to_euros transform). Original bill shows 12.27c/kWh."
     },
     {
       "filename": "2024 Mar - Apr.pdf",
@@ -49,7 +51,7 @@
         "mcc_code": "06",
         "dg_code": "DG6"
       },
-      "not_applicable": ["gprn", "litres", "unit_price"],
+      "not_applicable": ["gprn", "litres", "unit_price", "total_incl_vat"],
       "notes": "ESB total_incl_vat (2315.68) represents net balance after payments, not subtotal+VAT. Excluded from totals crosscheck."
     },
     {
@@ -73,6 +75,141 @@
         "total_incl_vat": "266.45"
       },
       "not_applicable": ["gprn", "litres", "unit_price"]
+    },
+    {
+      "filename": "094634_scan_14012026.pdf",
+      "location": "Steve_bills",
+      "provider": "Energia",
+      "bill_type": "electricity",
+      "expected": {
+        "mprn": "10300813006",
+        "account_number": "4587476796",
+        "invoice_number": "6710032",
+        "invoice_date": "09 Feb 2024",
+        "billing_period": "1 Jan 2024 to 31 Jan 2024",
+        "day_kwh": "2966",
+        "night_kwh": "1878",
+        "subtotal": "1139.75",
+        "vat_rate": "9",
+        "vat_amount": "102.58",
+        "total_incl_vat": "1242.33",
+        "dg_code": "DG5",
+        "mcc_code": "02"
+      },
+      "not_applicable": ["gprn", "litres", "unit_price"],
+      "notes": "14-page scanned Energia bill (compilation). Ground truth from page 1 (page 49 of source document). Night Saver tariff with day/night split. Standing charge 31 days @ 0.35162 = 10.90."
+    },
+    {
+      "filename": "2024 Heating Oil Invoices.pdf",
+      "location": "Steve_bills",
+      "provider": "Kerry Petroleum",
+      "bill_type": "fuel",
+      "expected": {
+        "invoice_number": "039661",
+        "invoice_date": "06/02/24",
+        "litres": "849",
+        "unit_price": "106.21",
+        "subtotal": "901.72",
+        "vat_rate": "13.50",
+        "vat_amount": "121.73",
+        "total_incl_vat": "1023.45"
+      },
+      "not_applicable": ["mprn", "gprn", "day_kwh", "night_kwh", "day_rate", "night_rate", "standing_charge", "pso_levy"],
+      "notes": "15-page scanned PDF with ~7-8 separate Kerry Petroleum invoices. Ground truth is from page 1 (invoice 039661, dated 06/02/24). UNI223 KEROSENE. Unit price is cents per litre."
+    },
+    {
+      "filename": "SSE_Airtricity_example.pdf",
+      "location": "root",
+      "provider": "SSE Airtricity",
+      "bill_type": "electricity",
+      "expected": {
+        "invoice_date": "22/01/2018",
+        "billing_period": "22/12/2017 - 22/01/2018",
+        "day_kwh": "247.00",
+        "day_rate": "0.1712",
+        "night_kwh": "49.00",
+        "night_rate": "0.0847",
+        "pso_levy": "7.69",
+        "subtotal": "72.85",
+        "vat_rate": "13.5",
+        "vat_amount": "9.83",
+        "total_incl_vat": "82.68",
+        "dg_code": "DG2",
+        "mcc_code": "MCC02"
+      },
+      "not_applicable": ["mprn", "account_number", "gprn", "litres", "unit_price"],
+      "notes": "SSE Airtricity example/demo bill. MPRN and account_number not present (anonymised example). Standing charge: 31 days @ 0.6037 = 18.72."
+    },
+    {
+      "filename": "Bill_310148750 (1).pdf",
+      "location": "root",
+      "provider": "Electric Ireland",
+      "bill_type": "electricity",
+      "expected": {
+        "mprn": "10306268587",
+        "account_number": "950960495",
+        "invoice_number": "310148750",
+        "invoice_date": "1 Mar 23",
+        "billing_period": "24 Dec 22 - 27 Feb 23",
+        "day_kwh": "3192",
+        "day_rate": "0.3992",
+        "pso_levy": "0.00",
+        "vat_rate": "9",
+        "vat_amount": "93.42",
+        "total_incl_vat": "1131.35",
+        "dg_code": "DG2",
+        "mcc_code": "MCC01"
+      },
+      "not_applicable": ["gprn", "litres", "unit_price", "subtotal"],
+      "notes": "Electric Ireland old format with Govt Electricity Credit (183.49) and EI Credit (45.87) plus savings (70.08). Subtotal excluded from scoring because the bill has split VAT lines (charges vs credits) making a single subtotal ambiguous. Standing charge: 66 days @ 0.9563 = 63.12."
+    },
+    {
+      "filename": "download.pdf",
+      "location": "root",
+      "provider": "Energia",
+      "bill_type": "electricity",
+      "expected": {
+        "mprn": "10306268587",
+        "account_number": "2298483377",
+        "invoice_number": "37870775",
+        "invoice_date": "22 December 2025",
+        "billing_period": "23/10/2025 - 19/12/2025",
+        "day_kwh": "841.699",
+        "night_kwh": "1290.023",
+        "day_rate": "0.3865",
+        "night_rate": "0.2125",
+        "day_cost": "325.32",
+        "night_cost": "274.13",
+        "pso_levy": "4.02",
+        "subtotal": "523.46",
+        "vat_rate": "9",
+        "vat_amount": "47.11",
+        "total_incl_vat": "554.38",
+        "dg_code": "DG2",
+        "mcc_code": "12"
+      },
+      "not_applicable": ["gprn", "litres", "unit_price"],
+      "notes": "Energia new format bill (Dec 2025). Word 'Energia' does NOT appear in extractable text - identified by VAT reg IE 632 6035 and Generali Building address. Has peak tariff (240.474 kWh @ 0.434 = 104.37), discount (232.26 CR), and export credits (87.512 @ -0.185 = 16.19 CR). Standing charge: 57 days @ 0.84 = 47.88."
+    },
+    {
+      "filename": "Steve_bill_photo.jpg",
+      "location": "Steve_bills",
+      "provider": "Electric Ireland",
+      "bill_type": "electricity",
+      "input_type": "image",
+      "expected": {
+        "day_kwh": "3485",
+        "day_rate": "0.3626",
+        "day_cost": "1263.66",
+        "standing_charge": "66.14",
+        "pso_levy": "153.86",
+        "subtotal": "1483.66",
+        "vat_rate": "9",
+        "vat_amount": "133.53",
+        "total_incl_vat": "1617.19"
+      },
+      "not_applicable": ["mprn", "account_number", "gprn", "litres", "unit_price", "night_kwh", "night_rate"],
+      "notes": "Photograph of Electric Ireland bill, rotated 90 degrees clockwise. Old format with single General tariff. MPRN/account not visible on this page. Standing charge: 58 days @ 1.1404/day. PSO Levy: 49 kVA, 2 months @ 1.57/KVA/M."
     }
   ]
 }

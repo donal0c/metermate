@@ -69,6 +69,8 @@ ENERGIA_CONFIG = {
                 (None, r"(?:Invoice|Bill)\s*Date\s*\n?\s*(\d{1,2}\s+\w+\s+\d{4})"),
                 # ACCOUNT SUMMARY section: "Date\n11 Apr 2025"
                 (r"ACCOUNT\s*SUMMARY", r"Date\s*\n\s*(\d{1,2}\s+\w+\s+\d{4})"),
+                # New format: "Date of this Bill\n22 December 2025"
+                (None, r"Date\s+of\s+this\s+Bill\s*\n\s*(\d{1,2}\s+\w+\s+\d{4})"),
                 (None, r"(?:Invoice|Bill)\s*Date\s*[:\s]*(\d{2}/\d{2}/\d{4})"),
                 (None, r"(?:Invoice|Bill)\s*Date\s*[:\s]*(\d{2}\.\d{2}\.\d{4})"),
             ],
@@ -78,6 +80,8 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Day\s+(?:Energy|Rate)\s+(\d[\d,]*)\s*(?:kWh|xWh|XWh)"),
                 (None, r"Day\s+Energy\n\s*(\d[\d,]*)\n\s*kWh"),
+                # CRU standard format: "Day 841.699 Units at €0.3865 per Unit"
+                (None, r"Day\s+(\d[\d,.]*)\s+Units?\s+at"),
             ],
             "confidence": 0.90,
             "transform": "strip_commas",
@@ -86,6 +90,8 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Day\s+(?:Energy|Rate)\s+\d[\d,]*\s*(?:kWh|xWh)\s*@\s*[€\u20ac]?\s*(\d+\.\d+)"),
                 (None, r"Day\s+Energy\n\s*\d[\d,]*\n\s*kWh\n\s*@\n\s*[€](\d+\.\d+)"),
+                # CRU standard format: "Day 841.699 Units at €0.3865 per Unit"
+                (None, r"Day\s+\d[\d,.]*\s+Units?\s+at\s+[€\u20ac](\d+\.\d+)"),
             ],
             "confidence": 0.90,
         },
@@ -93,6 +99,8 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Day\s+(?:Energy|Rate)\s+\d[\d,]*\s*(?:kWh|xWh)\s*@\s*[€\u20ac]?\s*\d+\.\d+\s*[€\u20ac]\s*(\d+\.\d+)"),
                 (None, r"Day\s+Energy\n\s*\d[\d,]*\n\s*kWh\n\s*@\n\s*[€]\d+\.\d+\n\s*[€](\d+\.\d+)"),
+                # CRU standard format: "Day ... per Unit\n€325.32"
+                (None, r"Day\s+\d[\d,.]*\s+Units?\s+at\s+[€\u20ac]\d+\.\d+\s+per\s+Unit\s*\n\s*[€\u20ac](\d[\d,]*\.\d{2})"),
             ],
             "confidence": 0.85,
         },
@@ -100,6 +108,8 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Night\s+(?:Energy|Rate)\s+(\d[\d,]*)\s*(?:kWh|xWh|XWh)"),
                 (None, r"Night\s+Energy\n\s*(\d[\d,]*)\n\s*kWh"),
+                # CRU standard format: "Night 1,290.023 Units at"
+                (None, r"Night\s+(\d[\d,.]*)\s+Units?\s+at"),
             ],
             "confidence": 0.90,
             "transform": "strip_commas",
@@ -108,6 +118,8 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Night\s+(?:Energy|Rate)\s+\d[\d,]*\s*(?:kWh|xWh)\s*@\s*[€\u20ac]?\s*(\d+\.\d+)"),
                 (None, r"Night\s+Energy\n\s*\d[\d,]*\n\s*kWh\n\s*@\n\s*[€](\d+\.\d+)"),
+                # CRU standard format: "Night ... Units at €0.2125 per Unit"
+                (None, r"Night\s+\d[\d,.]*\s+Units?\s+at\s+[€\u20ac](\d+\.\d+)"),
             ],
             "confidence": 0.90,
         },
@@ -115,6 +127,8 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Night\s+(?:Energy|Rate)\s+\d[\d,]*\s*(?:kWh|xWh)\s*@\s*[€\u20ac]?\s*\d+\.\d+\s*[€\u20ac]\s*(\d+\.\d+)"),
                 (None, r"Night\s+Energy\n\s*\d[\d,]*\n\s*kWh\n\s*@\n\s*[€]\d+\.\d+\n\s*[€](\d+\.\d+)"),
+                # CRU standard format: "Night ... per Unit\n€274.13"
+                (None, r"Night\s+\d[\d,.]*\s+Units?\s+at\s+[€\u20ac]\d+\.\d+\s+per\s+Unit\s*\n\s*[€\u20ac](\d[\d,]*\.\d{2})"),
             ],
             "confidence": 0.85,
         },
@@ -122,17 +136,35 @@ ENERGIA_CONFIG = {
             "patterns": [
                 (None, r"Standing\s*Charge\s*\.?\s*(\d+)\.?\s*Days?\s*@\.?\s*#?[€\u20ac]?\s*(\d+\.\d+)\s*#?[€\u20ac]\s*(\d+\.\d+)"),
                 (None, r"Standing\s+Charge\s*\n\s*(\d+)\s*\n\s*Days\s*\n\s*@\s*\n\s*[€]?(\d+\.\d+)\s*\n\s*[€](\d+\.\d+)"),
+                # CRU standard format: "Standing Charge 57 days at €0.84 per day\n€47.88"
+                (None, r"Standing\s+Charge\s+(\d+)\s+days?\s+at\s+[€\u20ac](\d+\.\d+)\s+per\s+day\s*\n\s*[€\u20ac](\d+\.\d+)"),
             ],
             "confidence": 0.85,
             "capture_groups": {"days": 1, "rate": 2, "total": 3},
         },
         "pso_levy": {
             "patterns": [
-                (None, r"PSO\s+Levy.*?[€\u20ac]\s*(\d+[\d,.]*\.\d{2})"),
+                # Multiline total on next line (must be before inline patterns)
+                # "Public Service Obligation Levy - 2 months at €2.01\n€4.02"
+                (None, r"Public\s+Service\s+Obligation\s+Levy.*?\n\s*[€\u20ac](\d+\.\d{2})"),
                 (None, r"PSO\s+Levy\s+Flat\s+Charge\s*\n\s*[€](\d+\.\d+)"),
+                # Inline total (fallback)
+                (None, r"PSO\s+Levy.*?[€\u20ac]\s*(\d+[\d,.]*\.\d{2})"),
                 (None, r"Public\s*Service\s*Obligation\s*Levy.*?[€\u20ac](\d+\.\d+)"),
             ],
             "confidence": 0.80,
+        },
+        "dg_code": {
+            "patterns": [
+                (None, r"(DG\d+)"),
+            ],
+            "confidence": 0.90,
+        },
+        "mcc_code": {
+            "patterns": [
+                (None, r"MCC\s*(\d+)"),
+            ],
+            "confidence": 0.90,
         },
         "subtotal": {
             "patterns": [
@@ -152,7 +184,8 @@ ENERGIA_CONFIG = {
         "vat_amount": {
             "patterns": [
                 (None, r"VAT\.?\s*@?\s*\d+\.?\d*%\s*[€\u20ac]?\s*([\d,]+\.\d{2})"),
-                (None, r"VAT\s+on\s+[€\u20ac][\d,.]+\s+at\s+\d+%\s*\n?\s*[€\u20ac]([\d,]+\.\d{2})"),
+                # Multiline: "VAT on €523.46 at 9%\n€47.11"
+                (None, r"VAT\s+on\s+[€\u20ac][\d,.]+\s+at\s+\d+%\s*\n\s*[€\u20ac]([\d,]+\.\d{2})"),
             ],
             "confidence": 0.90,
             "transform": "strip_commas",
@@ -160,7 +193,8 @@ ENERGIA_CONFIG = {
         "total_incl_vat": {
             "patterns": [
                 (None, r"Total\s*Charges?\s*[Ff]or\s*(?:the|this)\s*Period\s*[€\u20ac]?\s*([\d,]+\.\d{2})"),
-                (None, r"Total\s+transactions?\s+for\s+this\s+period\s*\n?\s*[€\u20ac]([\d,]+\.\d{2})"),
+                # Multiline: "Total transactions for this period\n€554.38"
+                (None, r"Total\s+transactions?\s+for\s+this\s+period\s*\n\s*[€\u20ac]([\d,]+\.\d{2})"),
             ],
             "confidence": 0.90,
             "transform": "strip_commas",

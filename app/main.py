@@ -4,10 +4,21 @@ Home page for the Streamlit multipage app. Provides two clear workflow
 cards (Bill Extractor, Meter Analysis).
 """
 
+import os
 import streamlit as st
 from pathlib import Path
 
 from common.theme import apply_theme
+
+# Bridge Streamlit Cloud secrets into environment variables so that
+# non-Streamlit code (orchestrator, llm_extraction) can access them
+# via os.environ.  Locally the .env file is used instead.
+for key in ("GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI"):
+    if key not in os.environ:
+        try:
+            os.environ[key] = st.secrets[key]
+        except (KeyError, FileNotFoundError):
+            pass
 
 # Page config
 st.set_page_config(

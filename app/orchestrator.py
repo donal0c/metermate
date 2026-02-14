@@ -32,6 +32,8 @@ from pipeline import (
     extract_with_config,
     extract_tier2_universal,
     calculate_confidence,
+    postprocess_vat_and_totals,
+    postprocess_computed_costs,
     PROVIDER_BILL_TYPE,
 )
 from provider_configs import get_provider_config
@@ -59,7 +61,14 @@ def _safe_float(value: str | None) -> float | None:
     if value is None:
         return None
     try:
-        return float(value.replace(",", ""))
+        cleaned = str(value).strip()
+        if not cleaned:
+            return None
+        cleaned = cleaned.split("(", 1)[0].strip()
+        cleaned = re.sub(r"[^\d.\-]", "", cleaned.replace(",", ""))
+        if cleaned in {"", "-", ".", "-."}:
+            return None
+        return float(cleaned)
     except (ValueError, AttributeError):
         return None
 
@@ -101,27 +110,35 @@ def _build_bill(
     day_kwh = _safe_float(get_val("day_kwh"))
     day_rate = _safe_float(get_val("day_rate"))
     day_cost = _safe_float(get_val("day_cost"))
-    if day_kwh is not None or day_cost is not None:
-        line_items.append(LineItem(
-            description="Day Energy",
-            line_total=day_cost or 0.0,
-            quantity=day_kwh,
-            unit="kWh",
-            unit_price=day_rate,
-        ))
+    if day_kwh is not None or day_rate is not None or day_cost is not None:
+        day_total = day_cost
+        if day_total is None and day_kwh is not None and day_rate is not None:
+            day_total = round(day_kwh * day_rate, 2)
+        if day_total is not None:
+            line_items.append(LineItem(
+                description="Day Energy",
+                line_total=day_total,
+                quantity=day_kwh,
+                unit="kWh",
+                unit_price=day_rate,
+            ))
 
     # Night energy
     night_kwh = _safe_float(get_val("night_kwh"))
     night_rate = _safe_float(get_val("night_rate"))
     night_cost = _safe_float(get_val("night_cost"))
-    if night_kwh is not None or night_cost is not None:
-        line_items.append(LineItem(
-            description="Night Energy",
-            line_total=night_cost or 0.0,
-            quantity=night_kwh,
-            unit="kWh",
-            unit_price=night_rate,
-        ))
+    if night_kwh is not None or night_rate is not None or night_cost is not None:
+        night_total = night_cost
+        if night_total is None and night_kwh is not None and night_rate is not None:
+            night_total = round(night_kwh * night_rate, 2)
+        if night_total is not None:
+            line_items.append(LineItem(
+                description="Night Energy",
+                line_total=night_total,
+                quantity=night_kwh,
+                unit="kWh",
+                unit_price=night_rate,
+            ))
 
     # Standing charge
     standing_val = get_val("standing_charge")
@@ -136,6 +153,8 @@ def _build_bill(
             sc_days = None
             sc_rate = None
             sc_total = _safe_float(standing_val)
+            if sc_total is None and sc_days is not None and sc_rate is not None:
+                sc_total = round(sc_days * sc_rate, 2)
         if sc_total is not None:
             line_items.append(LineItem(
                 description="Standing Charge",
@@ -157,13 +176,15 @@ def _build_bill(
     litres = _safe_float(get_val("litres"))
     unit_price = _safe_float(get_val("unit_price"))
     if litres is not None:
-        line_items.append(LineItem(
-            description="Kerosene",
-            line_total=bill.subtotal or 0.0,
-            quantity=litres,
-            unit="litres",
-            unit_price=unit_price,
-        ))
+        subtotal = bill.subtotal
+        if subtotal is not None:
+            line_items.append(LineItem(
+                description="Kerosene",
+                line_total=subtotal,
+                quantity=litres,
+                unit="litres",
+                unit_price=unit_price,
+            ))
 
     bill.line_items = line_items
 
@@ -358,6 +379,10 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
                     if fname not in extraction_fields:
                         extraction_fields[fname] = fval
 
+            # Self-heal VAT/total fields using cross-field math
+            computed_cost_corrections = postprocess_computed_costs(extraction_fields)
+            vat_corrections = postprocess_vat_and_totals(extraction_fields)
+
             bill_type = PROVIDER_BILL_TYPE.get(provider_name)
             confidence = calculate_confidence(
                 extraction_fields,
@@ -366,12 +391,37 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
                 avg_ocr_confidence=avg_ocr_conf,
             )
 
+            # ---- Tier 4 LLM escalation for scanned PDFs ----
+            tier4 = None
+            if confidence.band == "escalate":
+                tier4 = _try_tier4_llm(source, extraction_path)
+                if tier4 is not None and tier4.field_count > 0:
+                    extraction_fields = merge_llm_with_existing(
+                        tier4.fields, extraction_fields, prefer_llm=True,
+                    )
+                    if provider_name == "unknown":
+                        provider_name = _detect_provider_from_fields(tier4.fields)
+                        provider_result = ProviderDetectionResult(
+                            provider_name=provider_name,
+                            is_known=provider_name != "unknown",
+                        )
+                    bill_type = PROVIDER_BILL_TYPE.get(provider_name)
+                    computed_cost_corrections.extend(
+                        postprocess_computed_costs(extraction_fields)
+                    )
+                    confidence = calculate_confidence(
+                        extraction_fields,
+                        provider=provider_name,
+                        bill_type=bill_type,
+                        avg_ocr_confidence=avg_ocr_conf,
+                    )
+
             build_result = Tier3ExtractionResult(
                 provider=provider_name,
                 fields=extraction_fields,
                 field_count=len(extraction_fields),
                 hit_rate=spatial_result.hit_rate,
-                warnings=spatial_result.warnings,
+                warnings=spatial_result.warnings + computed_cost_corrections + vat_corrections,
             )
 
             extraction_method = " → ".join(extraction_path)
@@ -384,6 +434,7 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
                 provider_detection=provider_result,
                 tier3=tier3,
                 tier2=spatial_result,
+                tier4=tier4,
                 extraction_path=extraction_path,
             )
 
@@ -473,6 +524,10 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
         # Wrap Tier 2 fields into a Tier3-shaped result for downstream compat
         extraction_fields = tier2.fields
 
+    # ---- Self-heal VAT/total fields using cross-field math ----
+    computed_cost_corrections = postprocess_computed_costs(extraction_fields)
+    vat_corrections = postprocess_vat_and_totals(extraction_fields)
+
     # ---- Confidence scoring ----
     bill_type = PROVIDER_BILL_TYPE.get(provider_name)
     confidence = calculate_confidence(
@@ -488,9 +543,10 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
         tier4 = _try_tier4_llm(source, extraction_path)
         if tier4 is not None and tier4.field_count > 0:
             extraction_fields = merge_llm_with_existing(
-                tier4.fields, extraction_fields,
+                tier4.fields, extraction_fields, prefer_llm=True,
             )
             # Recalculate confidence with merged fields
+            computed_cost_corrections.extend(postprocess_computed_costs(extraction_fields))
             confidence = calculate_confidence(
                 extraction_fields,
                 provider=provider_name,
@@ -501,6 +557,7 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
     # Build a Tier3-shaped result for _build_bill compatibility
     if tier3 is not None:
         build_result = tier3
+        build_result.warnings.extend(computed_cost_corrections + vat_corrections)
     else:
         build_result = Tier3ExtractionResult(
             provider=provider_name,
@@ -509,6 +566,7 @@ def extract_bill_pipeline(source: bytes | str) -> PipelineResult:
             hit_rate=tier2.hit_rate if tier2 else 0.0,
             warnings=tier2.warnings if tier2 else [],
         )
+        build_result.warnings.extend(computed_cost_corrections + vat_corrections)
 
     extraction_method = " → ".join(extraction_path)
     bill = _build_bill(build_result, provider_name, confidence, extraction_method, text)
@@ -587,6 +645,10 @@ def extract_bill_from_image(source: bytes | str) -> PipelineResult:
                 if fname not in extraction_fields:
                     extraction_fields[fname] = fval
 
+        # Self-heal VAT/total fields using cross-field math
+        computed_cost_corrections = postprocess_computed_costs(extraction_fields)
+        vat_corrections = postprocess_vat_and_totals(extraction_fields)
+
         bill_type = PROVIDER_BILL_TYPE.get(provider_name)
         confidence = calculate_confidence(
             extraction_fields,
@@ -595,12 +657,40 @@ def extract_bill_from_image(source: bytes | str) -> PipelineResult:
             avg_ocr_confidence=avg_ocr_conf,
         )
 
+        # ---- Tier 4 LLM escalation for images (same as PDF path) ----
+        tier4 = None
+        if confidence.band == "escalate":
+            tier4 = _try_tier4_llm(source, extraction_path, is_image=True)
+            if tier4 is not None and tier4.field_count > 0:
+                extraction_fields = merge_llm_with_existing(
+                    tier4.fields, extraction_fields,
+                    prefer_llm=True,
+                )
+                # Detect provider from LLM if still unknown
+                if provider_name == "unknown":
+                    provider_name = _detect_provider_from_fields(tier4.fields)
+                    provider_result = ProviderDetectionResult(
+                        provider_name=provider_name,
+                        is_known=provider_name != "unknown",
+                    )
+                # Recalculate confidence with merged fields
+                bill_type = PROVIDER_BILL_TYPE.get(provider_name)
+                computed_cost_corrections.extend(
+                    postprocess_computed_costs(extraction_fields)
+                )
+                confidence = calculate_confidence(
+                    extraction_fields,
+                    provider=provider_name,
+                    bill_type=bill_type,
+                    avg_ocr_confidence=avg_ocr_conf,
+                )
+
         build_result = Tier3ExtractionResult(
             provider=provider_name,
             fields=extraction_fields,
             field_count=len(extraction_fields),
             hit_rate=spatial_result.hit_rate,
-            warnings=spatial_result.warnings,
+            warnings=spatial_result.warnings + computed_cost_corrections + vat_corrections,
         )
 
         extraction_method = " → ".join(extraction_path)
@@ -613,6 +703,7 @@ def extract_bill_from_image(source: bytes | str) -> PipelineResult:
             provider_detection=provider_result,
             tier3=tier3,
             tier2=spatial_result,
+            tier4=tier4,
             extraction_path=extraction_path,
         )
 
