@@ -1,6 +1,6 @@
 """
 Playwright end-to-end tests for the confidence UX, inline editing,
-and improved comparison table (steve-ymh feature).
+and improved comparison table.
 
 Validates that:
   - Traffic light confidence badges appear (green/amber/red)
@@ -30,7 +30,7 @@ pytestmark = pytest.mark.e2e
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
 STREAMLIT_PORT = 8601  # Unique port to avoid conflicts
 
 

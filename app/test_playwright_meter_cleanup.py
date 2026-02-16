@@ -1,5 +1,5 @@
 """
-Playwright end-to-end tests for Meter Analysis page cleanup (steve-g4e).
+Playwright end-to-end tests for Meter Analysis page cleanup.
 
 Validates that:
   - Sidebar is short and focused (uploader + navigation only)

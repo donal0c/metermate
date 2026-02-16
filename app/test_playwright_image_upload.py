@@ -28,8 +28,8 @@ pytestmark = pytest.mark.e2e
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
-IMAGE_FILE = "Steve_bill_photo.jpg"
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
+IMAGE_FILE = "sample_bill_photo.jpg"
 STREAMLIT_PORT = 8599  # Same port as other E2E tests
 
 
@@ -100,7 +100,7 @@ class TestImageUpload:
         page.wait_for_timeout(15000)
 
     def test_image_uploader_accepts_jpg(self, page: Page, streamlit_app: str):
-        """Upload Steve_bill_photo.jpg and verify extraction output appears."""
+        """Upload sample_bill_photo.jpg and verify extraction output appears."""
         self._upload_image(page, streamlit_app)
 
         content = page.content()

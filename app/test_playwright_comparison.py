@@ -31,7 +31,7 @@ pytestmark = pytest.mark.e2e
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
 STREAMLIT_PORT = 8598  # Different port from other E2E tests
 
 

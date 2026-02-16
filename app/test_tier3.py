@@ -1,7 +1,7 @@
 """
 Tests for Tier 3: Config-driven provider-specific regex extraction.
 
-Covers acceptance criteria for steve-8vw:
+Covers acceptance criteria for Tier 3 extraction:
   (1) Config-driven extractor for Energia, Kerry Petroleum, Go Power, ESB Networks
   (2) Provider configs with schema: provider, version, fields{patterns, confidence}
   (3) Preprocessing hooks
@@ -28,7 +28,7 @@ from provider_configs import (
     SSE_AIRTRICITY_CONFIG,
 )
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 
 

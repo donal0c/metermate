@@ -248,7 +248,7 @@ python3 -m pytest -m "performance and not slow" app/tests/test_e2e_performance.p
 
 3. **Test data:**
    - Large HDF files are generated automatically by test fixtures
-   - PDF bills should be in `/Users/donalocallaghan/workspace/vibes/steve/Steve_bills/`
+   - PDF bills should be in `/Users/donalocallaghan/workspace/vibes/steve/sample_bills/`
    - Tests will skip if required files not found
 
 ## Performance Benchmarks
@@ -291,7 +291,7 @@ python3 -m pytest -m "performance and not slow" app/tests/test_e2e_performance.p
 
 ### `create_multi_page_pdf(num_pages)`
 - Placeholder for large PDF generation
-- Currently returns first available PDF from `Steve_bills/`
+- Currently returns first available PDF from `sample_bills/`
 - Future: Generate synthetic multi-page PDFs
 
 ## Debugging Failed Tests
@@ -379,7 +379,7 @@ jobs:
 ## Known Limitations
 
 1. **Multi-page PDF generation:**
-   - Currently uses existing PDFs from `Steve_bills/`
+   - Currently uses existing PDFs from `sample_bills/`
    - Future: Generate synthetic PDFs with reportlab
 
 2. **Memory profiling:**
@@ -425,7 +425,7 @@ python3 -m playwright install chromium
 ### Test data not found
 ```bash
 # Verify test data locations
-ls -la /Users/donalocallaghan/workspace/vibes/steve/Steve_bills/
+ls -la /Users/donalocallaghan/workspace/vibes/steve/sample_bills/
 ls -la /Users/donalocallaghan/workspace/vibes/steve/*.csv
 ```
 

@@ -1,8 +1,7 @@
-# Steve - Energy Audit Data Platform
+# Energy Audit Data Platform
 
 **Status**: Research & Discovery Phase
 **Last Updated**: February 2026
-**Client**: Energy Consultancy (Steve)
 
 ## The Problem
 

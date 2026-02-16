@@ -36,7 +36,7 @@ run_edge_tests.py
 verify_performance_tests.sh
 
 # Bills / sample data
-Steve_bills/
+sample_bills/
 extracted_images/
 screenshots/
 test-results/

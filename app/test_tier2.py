@@ -5,7 +5,7 @@ Tests the universal patterns work across any Irish utility bill by running
 extraction with provider detection disabled (simulating unknown provider).
 Measures and validates hit rates per field and per fixture.
 
-Covers acceptance criteria for steve-xqu.
+Covers acceptance criteria for Tier 2 extraction.
 """
 import json
 import os
@@ -21,7 +21,7 @@ from pipeline import (
 )
 from orchestrator import extract_bill_pipeline, PipelineResult
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 GROUND_TRUTH_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "ground_truth.json")
 
 

@@ -18,7 +18,7 @@ Usage:
     python3 -m pytest evaluate_pipeline.py -v       # As pytest test
 
 Ground truth: app/fixtures/ground_truth.json
-Fixtures:     Steve_bills/*.pdf
+Fixtures:     sample_bills/*.pdf
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from orchestrator import extract_bill_pipeline, extract_bill_from_image, Pipelin
 
 
 GROUND_TRUTH_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "ground_truth.json")
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 
 
@@ -144,7 +144,7 @@ def evaluate_fixture(fixture: dict) -> dict:
     expected = fixture["expected"]
     not_applicable = set(fixture.get("not_applicable", []))
     input_type = fixture.get("input_type", "pdf")
-    location = fixture.get("location", "Steve_bills")
+    location = fixture.get("location", "sample_bills")
 
     # Resolve file path based on location
     if location == "root":

@@ -1,4 +1,4 @@
-# Steve - Energy Insight
+# Energy Insight
 
 Irish electricity bill extraction and smart meter analysis tool, built as a Streamlit multipage app for professional energy audits.
 
@@ -140,4 +140,4 @@ Configured for Streamlit Community Cloud:
 
 ## Sample Data
 
-`Steve_bills/` contains sample PDFs and images for testing (gitignored). Tests that require these files skip gracefully if not present.
+`sample_bills/` contains sample PDFs and images for testing (gitignored). Tests that require these files skip gracefully if not present.

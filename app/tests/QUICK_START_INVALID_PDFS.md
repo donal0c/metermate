@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Comprehensive Playwright E2E tests that verify the Steve energy bill app **gracefully handles corrupted, malformed, and edge-case PDF files** without crashing or exposing technical errors to users.
+Comprehensive Playwright E2E tests that verify the energy bill app **gracefully handles corrupted, malformed, and edge-case PDF files** without crashing or exposing technical errors to users.
 
 ## 30-Second Quick Start
 

@@ -2,8 +2,8 @@
 Tests for pipeline Tier 0 (native text detection) and Tier 1 (provider detection).
 
 Covers acceptance criteria for:
-  steve-3gv: Tier 0 native text detection
-  steve-wp1: Tier 1 provider detection
+  Tier 0 native text detection
+  Tier 1 provider detection
 """
 import os
 import pytest
@@ -15,7 +15,7 @@ from pipeline import (
     PROVIDER_KEYWORDS,
 )
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 
 
 # ---------------------------------------------------------------------------

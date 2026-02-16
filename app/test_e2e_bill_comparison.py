@@ -14,7 +14,7 @@ Tests the full bill comparison workflow including:
   - Multiple provider support (Energia, etc.)
 
 Test Configuration:
-  - Uses 2-3 Energia/mixed provider bills from Steve_bills/
+  - Uses 2-3 Energia/mixed provider bills from sample_bills/
   - Tests with:
     * "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
     * "2024 Mar - Apr.pdf"
@@ -42,7 +42,7 @@ pytestmark = pytest.mark.e2e
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
 STREAMLIT_PORT = 8597
 
 

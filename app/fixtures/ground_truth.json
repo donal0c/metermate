@@ -79,7 +79,7 @@
     },
     {
       "filename": "094634_scan_14012026.pdf",
-      "location": "Steve_bills",
+      "location": "sample_bills",
       "provider": "Energia",
       "bill_type": "electricity",
       "expected": {
@@ -102,7 +102,7 @@
     },
     {
       "filename": "2024 Heating Oil Invoices.pdf",
-      "location": "Steve_bills",
+      "location": "sample_bills",
       "provider": "Kerry Petroleum",
       "bill_type": "fuel",
       "expected": {
@@ -193,8 +193,8 @@
       "notes": "Energia new format bill (Dec 2025). Word 'Energia' does NOT appear in extractable text - identified by VAT reg IE 632 6035 and Generali Building address. Has peak tariff (240.474 kWh @ 0.434 = 104.37), discount (232.26 CR), and export credits (87.512 @ -0.185 = 16.19 CR). Standing charge: 57 days @ 0.84 = 47.88."
     },
     {
-      "filename": "Steve_bill_photo.jpg",
-      "location": "Steve_bills",
+      "filename": "sample_bill_photo.jpg",
+      "location": "sample_bills",
       "provider": "Electric Ireland",
       "bill_type": "electricity",
       "input_type": "image",

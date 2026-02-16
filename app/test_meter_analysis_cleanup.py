@@ -1,5 +1,5 @@
 """
-Unit tests for Meter Analysis page cleanup (steve-g4e).
+Unit tests for Meter Analysis page cleanup.
 
 Tests the refactored filter bar, tariff config, and sidebar structure.
 These tests validate the logic functions without requiring a running Streamlit app.

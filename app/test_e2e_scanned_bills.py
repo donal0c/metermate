@@ -37,7 +37,7 @@ pytestmark = pytest.mark.e2e
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
 STREAMLIT_PORT = 8599
 
 
@@ -195,12 +195,12 @@ class TestScannedBillBasics:
     def test_energia_scan_file_exists(self):
         """Verify Energia scanned bill test fixture exists."""
         assert _pdf_exists("094634_scan_14012026.pdf"), \
-            "Energia scanned bill not found in Steve_bills/"
+            "Energia scanned bill not found in sample_bills/"
 
     def test_kerry_scan_file_exists(self):
         """Verify Kerry Petroleum scanned invoice test fixture exists."""
         assert _pdf_exists("2024 Heating Oil Invoices.pdf"), \
-            "Kerry Petroleum scanned invoice not found in Steve_bills/"
+            "Kerry Petroleum scanned invoice not found in sample_bills/"
 
     def test_app_welcome_page_loads(self, page: Page, streamlit_app: str):
         """Verify Streamlit app loads and shows welcome page."""

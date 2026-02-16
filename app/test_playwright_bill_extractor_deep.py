@@ -14,12 +14,12 @@ these tests validate:
   - Visual indicators (confidence colors, status chips, section visibility)
   - Edge cases (deduplication, error states, missing fields)
 
-Test bill files (in Steve_bills/):
+Test bill files (in sample_bills/):
   - "1845.pdf"                                          — Go Power bill
   - "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf" — Energia bill
   - "2024 Mar - Apr.pdf"                                — ESB Networks bill
   - "094634_scan_14012026.pdf"                          — Scanned bill (low confidence)
-  - "Steve_bill_photo.jpg"                              — Photographed bill (JPG)
+  - "sample_bill_photo.jpg"                              — Photographed bill (JPG)
 
 Run:
     python3 -m pytest test_playwright_bill_extractor_deep.py -m e2e -v
@@ -42,7 +42,7 @@ from playwright.sync_api import Page, expect
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
 STREAMLIT_PORT = 8610  # Unique port — no conflicts with other test files
 
 # Known test bill filenames
@@ -50,7 +50,7 @@ ENERGIA_PDF = "3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf"
 GO_POWER_PDF = "1845.pdf"
 ESB_PDF = "2024 Mar - Apr.pdf"
 SCANNED_PDF = "094634_scan_14012026.pdf"
-PHOTO_JPG = "Steve_bill_photo.jpg"
+PHOTO_JPG = "sample_bill_photo.jpg"
 
 
 def _bill_path(filename: str) -> str:

@@ -24,7 +24,7 @@ pytestmark = pytest.mark.e2e
 
 APP_DIR = os.path.dirname(__file__)
 APP_PATH = os.path.join(APP_DIR, "main.py")
-BILLS_DIR = os.path.join(APP_DIR, "..", "Steve_bills")
+BILLS_DIR = os.path.join(APP_DIR, "..", "sample_bills")
 STREAMLIT_PORT = 8601  # Different port to avoid conflicts
 
 
@@ -172,7 +172,7 @@ class TestTier4DirectExtraction:
 
     @pytest.mark.skipif(not _has_gemini_key(), reason="GEMINI_API_KEY not set")
     @pytest.mark.skipif(
-        not _bill_exists("Steve_bill_photo.jpg"),
+        not _bill_exists("sample_bill_photo.jpg"),
         reason="Photo bill not found",
     )
     def test_photo_bill_extraction_quality(self):
@@ -180,7 +180,7 @@ class TestTier4DirectExtraction:
         from llm_extraction import extract_tier4_llm
 
         result = extract_tier4_llm(
-            _bill_path("Steve_bill_photo.jpg"), is_image=True
+            _bill_path("sample_bill_photo.jpg"), is_image=True
         )
 
         # Should extract at least some fields from the photo

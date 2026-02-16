@@ -10,8 +10,8 @@ import os
 
 import pytest
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
-IMAGE_PATH = os.path.join(BILLS_DIR, "Steve_bill_photo.jpg")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
+IMAGE_PATH = os.path.join(BILLS_DIR, "sample_bill_photo.jpg")
 
 
 def _image_exists() -> bool:
@@ -37,7 +37,7 @@ class TestImageExtensionRouting:
         assert not "data.csv".lower().endswith((".jpg", ".jpeg", ".png"))
 
 
-@pytest.mark.skipif(not _image_exists(), reason="Steve_bill_photo.jpg not found")
+@pytest.mark.skipif(not _image_exists(), reason="sample_bill_photo.jpg not found")
 class TestGetOcrDataframeImage:
     """Test OCR dataframe extraction from images."""
 
@@ -64,7 +64,7 @@ class TestGetOcrDataframeImage:
         assert not df.empty, "OCR should work with image bytes"
 
 
-@pytest.mark.skipif(not _image_exists(), reason="Steve_bill_photo.jpg not found")
+@pytest.mark.skipif(not _image_exists(), reason="sample_bill_photo.jpg not found")
 class TestExtractBillFromImage:
     """Test the full image extraction pipeline."""
 

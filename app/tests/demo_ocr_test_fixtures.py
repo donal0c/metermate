@@ -29,7 +29,7 @@ except ImportError as e:
     sys.exit(1)
 
 # Source bill for creating degraded test fixtures
-BILLS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "sample_bills")
 SOURCE_BILL = os.path.join(BILLS_DIR, "1845.pdf")
 
 
@@ -194,7 +194,7 @@ def main():
 
     if not os.path.exists(SOURCE_BILL):
         print(f"\nError: Source bill not found: {SOURCE_BILL}")
-        print("Please ensure Steve_bills/1845.pdf exists.")
+        print("Please ensure sample_bills/1845.pdf exists.")
         return 1
 
     print(f"\nSource bill: {SOURCE_BILL}")

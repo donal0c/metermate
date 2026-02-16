@@ -48,7 +48,7 @@
 
 - [ ] **PDF bills available:**
   ```bash
-  ls -la /Users/donalocallaghan/workspace/vibes/steve/Steve_bills/*.pdf
+  ls -la /Users/donalocallaghan/workspace/vibes/steve/sample_bills/*.pdf
   ```
   Count: ___ PDFs found
 

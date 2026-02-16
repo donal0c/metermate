@@ -25,7 +25,7 @@ from llm_extraction import (
     extract_tier4_llm,
 )
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 
 
 def _bill_path(filename: str) -> str:
@@ -349,13 +349,13 @@ class TestTier4Integration:
     """Integration tests calling the actual Gemini API."""
 
     @pytest.mark.skipif(
-        not _bill_exists("Steve_bill_photo.jpg"),
+        not _bill_exists("sample_bill_photo.jpg"),
         reason="Photo bill not found",
     )
     def test_extract_photo_bill(self):
         """Extract fields from a photographed bill (JPG)."""
         result = extract_tier4_llm(
-            _bill_path("Steve_bill_photo.jpg"), is_image=True
+            _bill_path("sample_bill_photo.jpg"), is_image=True
         )
         assert isinstance(result, Tier4ExtractionResult)
         assert result.field_count > 0
@@ -404,13 +404,13 @@ class TestTier4Integration:
         assert abs(result.bill.total_incl_vat - 266.45) < 0.1
 
     @pytest.mark.skipif(
-        not _bill_exists("Steve_bill_photo.jpg"),
+        not _bill_exists("sample_bill_photo.jpg"),
         reason="Photo bill not found",
     )
     def test_merge_with_empty_existing(self):
         """Merge LLM results with no existing fields (pure LLM path)."""
         result = extract_tier4_llm(
-            _bill_path("Steve_bill_photo.jpg"), is_image=True
+            _bill_path("sample_bill_photo.jpg"), is_image=True
         )
         merged = merge_llm_with_existing(result.fields, {})
         assert len(merged) == result.field_count

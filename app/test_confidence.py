@@ -1,7 +1,7 @@
 """
 Tests for confidence scoring and cross-field validation.
 
-Covers acceptance criteria for steve-cbk.
+Covers acceptance criteria for confidence scoring.
 """
 import os
 import pytest
@@ -57,7 +57,7 @@ def _bad_fields() -> dict[str, FieldExtractionResult]:
     }
 
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 
 
 # ===================================================================
@@ -159,7 +159,7 @@ class TestValidateCrossFields:
 # ===================================================================
 
 class TestRangeValidation:
-    """Tests for the plausibility checks added for steve-tpx."""
+    """Tests for the plausibility checks for range validation."""
 
     def test_normal_day_rate_passes(self):
         fields = {"day_rate": _fr("day_rate", "0.15148")}

@@ -1,5 +1,5 @@
 """
-Pytest configuration for the Steve app test suite.
+Pytest configuration for the energy bill app test suite.
 
 Registers the custom 'e2e' marker used to tag Playwright end-to-end tests.
 By default, tests marked with @pytest.mark.e2e are skipped unless the

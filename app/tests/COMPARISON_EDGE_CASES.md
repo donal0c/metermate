@@ -237,7 +237,7 @@ When adding new edge case tests:
 
 ## Test Data Requirements
 
-Ensure these files exist in `Steve_bills/` directory:
+Ensure these files exist in `sample_bills/` directory:
 
 - `3 Energia 134 Bank Place (01.03.2025-31.03.2025).pdf` - Energia native PDF, high quality
 - `1845.pdf` - Go Power bill

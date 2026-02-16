@@ -4,7 +4,7 @@ Integration tests for the pipeline orchestrator.
 Tests the full extraction pipeline (Tier 0 → 1 → 3 → confidence → GenericBillData)
 against real bill PDFs and validates against ground-truth expected values.
 
-Covers acceptance criteria for steve-2qc:
+Covers acceptance criteria for pipeline orchestration:
   - Pipeline orchestrator routes documents through tiered extraction
   - Integration tests on all existing bills
   - All tests pass at >=95% field accuracy
@@ -18,18 +18,18 @@ from orchestrator import extract_bill_pipeline, PipelineResult
 from bill_parser import GenericBillData, generic_to_legacy
 from pipeline import ConfidenceResult
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 GROUND_TRUTH_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "ground_truth.json")
 
 
-def _pdf_path(filename: str, location: str = "Steve_bills") -> str:
+def _pdf_path(filename: str, location: str = "sample_bills") -> str:
     if location == "root":
         return os.path.join(ROOT_DIR, filename)
     return os.path.join(BILLS_DIR, filename)
 
 
-def _pdf_exists(filename: str, location: str = "Steve_bills") -> bool:
+def _pdf_exists(filename: str, location: str = "sample_bills") -> bool:
     return os.path.exists(_pdf_path(filename, location))
 
 
@@ -367,7 +367,7 @@ class TestGroundTruthAccuracy:
         provider = fixture["provider"]
         expected = fixture["expected"]
         not_applicable = set(fixture.get("not_applicable", []))
-        location = fixture.get("location", "Steve_bills")
+        location = fixture.get("location", "sample_bills")
         input_type = fixture.get("input_type", "pdf")
 
         pdf_path = _pdf_path(filename, location)

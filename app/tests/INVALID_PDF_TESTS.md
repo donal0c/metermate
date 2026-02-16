@@ -4,7 +4,7 @@ This document provides a detailed breakdown of the `test_e2e_invalid_pdfs.py` te
 
 ## Overview
 
-The invalid PDF test suite contains **15 tests** across **8 test classes** that verify the Steve app's resilience when handling corrupted, malformed, and edge-case PDF files.
+The invalid PDF test suite contains **15 tests** across **8 test classes** that verify the app's resilience when handling corrupted, malformed, and edge-case PDF files.
 
 ## Test Fixtures (Programmatically Generated PDFs)
 

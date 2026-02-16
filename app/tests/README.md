@@ -137,7 +137,7 @@ Comprehensive tests for the Welcome Page & Navigation functionality.
 
 3. **Ensure sample data exists:**
    - HDF sample: `/Users/donalocallaghan/workspace/vibes/steve/HDF_calckWh_10306268587_03-02-2026.csv`
-   - Bill sample: `/Users/donalocallaghan/workspace/vibes/steve/Steve_bills/1845.pdf`
+   - Bill sample: `/Users/donalocallaghan/workspace/vibes/steve/sample_bills/1845.pdf`
 
 ## Running Tests
 

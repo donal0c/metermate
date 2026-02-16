@@ -1,7 +1,7 @@
 """
 Tests for LineItem / GenericBillData dataclasses and legacy compatibility.
 
-Covers acceptance criteria for steve-ihw:
+Covers acceptance criteria for data model:
   (a) dataclass construction
   (b) serialization to dict/json
   (c) legacy compatibility mapping via generic_to_legacy()

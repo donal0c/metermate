@@ -7,7 +7,7 @@ Covers:
   - Integration test on scanned Energia bill (094634_scan_14012026.pdf)
   - Comparison of spatial extraction results with known values
 
-Covers acceptance criteria for steve-je3.
+Covers acceptance criteria for spatial extraction.
 """
 import os
 
@@ -27,7 +27,7 @@ from spatial_extraction import (
     FIELD_VALUE_TYPES,
 )
 
-BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "Steve_bills")
+BILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "sample_bills")
 
 
 def _pdf_path(filename: str) -> str:
